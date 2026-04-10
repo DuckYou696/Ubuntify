@@ -74,6 +74,7 @@ autoinstall:
       dkms install broadcom-sta/6.30.223.271 -k "$KVER" || true
       modprobe wl || true
       sleep 5
+      lsmod | grep wl >> /run/macpro.log || echo "WARNING: wl module not loaded" >> /run/macpro.log
 
       for i in $(seq 1 30); do
         WIFI_IFACE=$(ip link show | grep -oE 'wlp[^:]+' | head -1)
@@ -83,11 +84,14 @@ autoinstall:
         sleep 1
       done
       echo "WiFi interface: ${WIFI_IFACE:-not found}" >> /run/macpro.log
+      if [ -z "$WIFI_IFACE" ]; then
+        echo "WARNING: No WiFi interface detected, installation may fail" >> /run/macpro.log
+      fi
 
   network:
     version: 2
     wifis:
-      wifi-iface:
+      wl0:
         match:
           driver: wl
         dhcp4: true
@@ -109,7 +113,7 @@ autoinstall:
     config:
       - type: disk
         id: root-disk
-        path: /dev/sda
+        path: /dev/sda    # Mac Pro 2013 Apple PCIe SSD (AHCI, not NVMe)
         ptable: gpt
         wipe: superblock-recursive
         preserve: false
@@ -147,23 +151,32 @@ autoinstall:
     - |
       KVER="6.8.0-100-generic"
       PKGS="/cdrom/macpro-pkgs"
+      # Stage 1: Kernel headers (no deps)
       dpkg --root /target -i \
         $PKGS/linux-headers-6.8.0-100_6.8.0-100.100_all.deb \
         $PKGS/linux-headers-6.8.0-100-generic_6.8.0-100.100_amd64.deb \
         $PKGS/linux-libc-dev_6.8.0-100.100_amd64.deb \
-        $PKGS/linux-modules-6.8.0-100-generic_6.8.0-100.100_amd64.deb \
-        $PKGS/binutils-common_*.deb $PKGS/binutils_*.deb \
-        $PKGS/binutils-x86-64-linux-gnu_*.deb $PKGS/libbinutils_*.deb \
+        $PKGS/linux-modules-6.8.0-100-generic_6.8.0-100.100_amd64.deb || true
+      # Stage 2: Base libraries (binutils, gcc libs, libc)
+      dpkg --root /target -i \
+        $PKGS/binutils-common_*.deb $PKGS/libbinutils_*.deb \
         $PKGS/libctf-nobfd0_*.deb $PKGS/libctf0_*.deb \
-        $PKGS/libgprofng0_*.deb $PKGS/libsframe1_*.deb \
-        $PKGS/libgcc-s1_*.deb $PKGS/libgcc-13-dev_*.deb \
-        $PKGS/gcc-13-base_*.deb $PKGS/gcc-13_*.deb $PKGS/cpp-13_*.deb \
+        $PKGS/libsframe1_*.deb $PKGS/libgprofng0_*.deb \
+        $PKGS/binutils_*.deb $PKGS/binutils-x86-64-linux-gnu_*.deb \
+        $PKGS/libgcc-s1_*.deb $PKGS/gcc-13-base_*.deb \
+        $PKGS/libisl23_*.deb $PKGS/libmpfr6_*.deb $PKGS/libmpc3_*.deb \
+        $PKGS/libgcc-13-dev_*.deb $PKGS/cpp-13_*.deb $PKGS/gcc-13_*.deb \
         $PKGS/libstdc++6_*.deb $PKGS/libstdc++-13-dev_*.deb \
-        $PKGS/libisl23_*.deb $PKGS/libmpc3_*.deb $PKGS/libmpfr6_*.deb \
-        $PKGS/libc-dev-bin_*.deb $PKGS/libc6-dev_*.deb \
-        $PKGS/libcrypt-dev_*.deb $PKGS/rpcsvc-proto_*.deb \
+        $PKGS/libcrypt-dev_*.deb $PKGS/libc-dev-bin_*.deb \
+        $PKGS/libc6-dev_*.deb $PKGS/rpcsvc-proto_*.deb \
+        $PKGS/libc-devtools_*.deb || true
+      # Stage 3: Build tools (depend on stage 2)
+      dpkg --root /target -i \
         $PKGS/make_*.deb $PKGS/build-essential_*.deb \
-        $PKGS/perl-base_*.deb $PKGS/kmod_*.deb $PKGS/libkmod2_*.deb || true
+        $PKGS/perl-base_*.deb \
+        $PKGS/kmod_*.deb $PKGS/libkmod2_*.deb \
+        $PKGS/fakeroot_*.deb $PKGS/libfakeroot_*.deb || true
+      # Stage 4: DKMS and driver (depend on stage 3)
       dpkg --root /target -i $PKGS/dkms_*.deb $PKGS/broadcom-sta-dkms_*.deb || true
       chroot /target dkms add broadcom-sta/6.30.223.271 || true
       chroot /target dkms build broadcom-sta/6.30.223.271 -k "$KVER" || true
