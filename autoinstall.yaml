@@ -1,0 +1,173 @@
+autoinstall:
+  version: 1
+
+  refresh-installer:
+    update: no
+
+  kernel:
+    package: linux-image-6.8.0-100-generic
+
+  apt:
+    preserve_sources_list: true
+    preferences:
+      - package: "linux-image-6.8.0-100*"
+        pin: "release o=Ubuntu"
+        pin-priority: 1001
+
+  identity:
+    hostname: macpro-linux
+    username: teja
+    realname: Teja
+    password: "$6$TmJsc2FI7rBs9ipD$8MuzzFQFKbdwp3nS2AaAtUscGXwZiUWIBmlCLMag71kB2eujqGVb4"
+
+  ssh:
+    install-server: true
+    allow-pw: true
+    authorized-keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHC+HpN9l4rWjhILAseecXpN5xVe4eYxAKgf6RjsoJwi remote-access-20250923
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGceithSleqWG+lmbCb+8fI9lRQqN/Fho8ZN/E6X2Fx3 llorderbot-remote-deploy
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ2yBFJ3qh6zUR5Xi9IK17YMlrr57DgWOQBdCUywr3GH djtchill@Ch3atC0de
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOQ37O+h9gTmyE/z8eWMWflSDEzbZz/ojoEkalinYc06
+
+  reporting:
+    builtin:
+      type: print
+    macpro-monitor:
+      type: webhook
+      endpoint: "http://192.168.1.115:8080/webhook"
+      level: INFO
+
+  early-commands:
+    - |
+      KVER="6.8.0-100-generic"
+      echo "=== MAC PRO 2013 AUTOINSTALL ===" > /run/macpro.log
+      echo "Kernel: $(uname -r)" >> /run/macpro.log
+      echo "Target: $KVER" >> /run/macpro.log
+
+      dpkg -i /cdrom/pool/main/l/linux/linux-headers-${KVER%.*}_*.deb /cdrom/pool/main/l/linux/linux-headers-${KVER}_*.deb || true
+      dpkg -i /cdrom/pool/restricted/b/bcmwl/broadcom-sta-dkms_*.deb || true
+      dkms add broadcom-sta/6.30.223.271 || true
+      dkms build broadcom-sta/6.30.223.271 -k "$KVER" || true
+      dkms install broadcom-sta/6.30.223.271 -k "$KVER" || true
+      modprobe wl || true
+      sleep 5
+
+      for i in $(seq 1 30); do
+        WIFI_IFACE=$(ip link show | grep -oE 'wlp[^:]+' | head -1)
+        [ -n "$WIFI_IFACE" ] && break
+        WIFI_IFACE=$(ip link show | grep -oE 'wlan[0-9]+' | head -1)
+        [ -n "$WIFI_IFACE" ] && break
+        sleep 1
+      done
+      echo "WiFi interface: ${WIFI_IFACE:-not found}" >> /run/macpro.log
+
+  network:
+    version: 2
+    wifis:
+      wifi-iface:
+        match:
+          driver: wl
+        dhcp4: true
+        optional: true
+        access-points:
+          "ATTj6pXatS":
+            password: "j75b39=z?mpg"
+
+  packages:
+    - openssh-server
+    - wpasupplicant
+    - curl
+    - wireless-tools
+    - avahi-daemon
+    - libnss-mdns
+    - network-manager
+
+  storage:
+    config:
+      - type: disk
+        id: root-disk
+        path: /dev/sda
+        ptable: gpt
+        wipe: superblock-recursive
+        preserve: false
+      - type: partition
+        id: efi-partition
+        device: root-disk
+        size: 512M
+        flag: boot
+        partition_type: EF00
+        grub_device: true
+        number: 1
+      - type: format
+        id: efi-format
+        volume: efi-partition
+        fstype: fat32
+      - type: mount
+        id: efi-mount
+        device: efi-format
+        path: /boot/efi
+      - type: partition
+        id: root-partition
+        device: root-disk
+        size: -1
+        number: 2
+      - type: format
+        id: root-format
+        volume: root-partition
+        fstype: ext4
+      - type: mount
+        id: root-mount
+        device: root-format
+        path: /
+
+  late-commands:
+    - |
+      KVER="6.8.0-100-generic"
+      chroot /target dkms add broadcom-sta/6.30.223.271 || true
+      chroot /target dkms build broadcom-sta/6.30.223.271 -k "$KVER" || true
+      chroot /target dkms install broadcom-sta/6.30.223.271 -k "$KVER" || true
+      echo "wl" >> /target/etc/modules
+    - |
+      WIFI_IFACE=$(ip link show | grep -oE 'wlp[^:]+' | head -1 || ip link show | grep -oE 'wlan[0-9]+' | head -1)
+      WIFI_IFACE=${WIFI_IFACE:-wlan0}
+      mkdir -p /target/etc/netplan
+      cat > /target/etc/netplan/01-wifi.yaml << EOF
+      network:
+        version: 2
+        wifis:
+          ${WIFI_IFACE}:
+            match:
+              driver: wl
+            dhcp4: true
+            optional: true
+            access-points:
+              "ATTj6pXatS":
+                password: "j75b39=z?mpg"
+      EOF
+      chmod 600 /target/etc/netplan/01-wifi.yaml
+    - |
+      sed -i 's/^hosts:.*/hosts: files mdns_minimal [NOTFOUND=return] dns/' /target/etc/nsswitch.conf
+    - |
+      chroot /target apt-mark hold linux-image-6.8.0-100-generic
+      chroot /target apt-mark hold linux-headers-6.8.0-100-generic
+    - |
+      echo "teja ALL=(ALL) NOPASSWD:ALL" >> /target/etc/sudoers.d/teja
+      chmod 440 /target/etc/sudoers.d/teja
+    - |
+      mkdir -p /target/var/log/macpro-install
+      cp /run/macpro.log /target/var/log/macpro-install/early-commands.log || true
+      dmesg > /target/var/log/macpro-install/dmesg.log || true
+
+  error-commands:
+    - |
+      modprobe wl || true
+      ip link set wlan0 up 2>/dev/null || ip link set wlp2s0 up 2>/dev/null || true
+    - |
+      curl -X POST http://192.168.1.115:8080/webhook \
+        -H "Content-Type: application/json" \
+        -d '{"event": "error", "stage": "autoinstall", "message": "Installation failed"}' || true
+    - |
+      dmesg > /tmp/error-dmesg.log
+      journalctl -b > /tmp/error-journalctl.log
+
+  shutdown: reboot

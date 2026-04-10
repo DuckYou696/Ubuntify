@@ -1,15 +1,25 @@
-# VirtualBox test directory - contains VM disks, ISOs, and runtime files
-vbox-test/
-
-# Prerequisites - large binaries (ISOs, deb packages, kernel modules)
+# Prerequisites - large binaries (ISOs, deb packages)
 prereqs/
+
+# Build output
+*.iso
+*.qcow2
 
 # SSH credentials - NEVER commit private keys
 ssh-MacPro/
 ssh-Macbook/
 
+# macOS
+.DS_Store
+
 # Sisyphus internal
 .sisyphus/
 
-# macOS
-.DS_Store
+# Node runtime
+node_modules/
+macpro-monitor/server.log
+macpro-monitor/server.pid
+macpro-monitor/logs/
+
+# Extracted ISO contents
+extracted/
