@@ -157,19 +157,19 @@ autoinstall:
         $PKGS/linux-headers-6.8.0-100-generic_6.8.0-100.100_amd64.deb \
         $PKGS/linux-libc-dev_6.8.0-100.100_amd64.deb \
         $PKGS/linux-modules-6.8.0-100-generic_6.8.0-100.100_amd64.deb || true
-      # Stage 2: Base libraries (binutils, gcc libs, libc)
+      # Stage 2: Base libraries first, then binaries that depend on them
       dpkg --root /target -i \
         $PKGS/binutils-common_*.deb $PKGS/libbinutils_*.deb \
         $PKGS/libctf-nobfd0_*.deb $PKGS/libctf0_*.deb \
         $PKGS/libsframe1_*.deb $PKGS/libgprofng0_*.deb \
-        $PKGS/binutils_*.deb $PKGS/binutils-x86-64-linux-gnu_*.deb \
         $PKGS/libgcc-s1_*.deb $PKGS/gcc-13-base_*.deb \
         $PKGS/libisl23_*.deb $PKGS/libmpfr6_*.deb $PKGS/libmpc3_*.deb \
-        $PKGS/libgcc-13-dev_*.deb $PKGS/cpp-13_*.deb $PKGS/gcc-13_*.deb \
         $PKGS/libstdc++6_*.deb $PKGS/libstdc++-13-dev_*.deb \
         $PKGS/libcrypt-dev_*.deb $PKGS/libc-dev-bin_*.deb \
         $PKGS/libc6-dev_*.deb $PKGS/rpcsvc-proto_*.deb \
-        $PKGS/libc-devtools_*.deb || true
+        $PKGS/libc-devtools_*.deb \
+        $PKGS/binutils_*.deb $PKGS/binutils-x86-64-linux-gnu_*.deb \
+        $PKGS/libgcc-13-dev_*.deb $PKGS/cpp-13_*.deb $PKGS/gcc-13_*.deb || true
       # Stage 3: Build tools (depend on stage 2)
       dpkg --root /target -i \
         $PKGS/make_*.deb $PKGS/build-essential_*.deb \
