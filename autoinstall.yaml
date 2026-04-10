@@ -59,7 +59,7 @@ autoinstall:
               $PKGS/gcc-13-base_*.deb $PKGS/gcc-13_*.deb $PKGS/cpp-13_*.deb \
               $PKGS/libstdc++6_*.deb $PKGS/libstdc++-13-dev_*.deb \
               $PKGS/libisl23_*.deb $PKGS/libmpc3_*.deb $PKGS/libmpfr6_*.deb \
-              $PKGS/libc6_*.deb $PKGS/libc-dev-bin_*.deb $PKGS/libc6-dev_*.deb \
+              $PKGS/libc-dev-bin_*.deb $PKGS/libc6-dev_*.deb \
               $PKGS/libc-devtools_*.deb $PKGS/libcrypt-dev_*.deb \
               $PKGS/rpcsvc-proto_*.deb \
               $PKGS/make_*.deb $PKGS/build-essential_*.deb \
@@ -147,7 +147,24 @@ autoinstall:
     - |
       KVER="6.8.0-100-generic"
       PKGS="/cdrom/macpro-pkgs"
-      dpkg --root /target -i $PKGS/broadcom-sta-dkms_*.deb $PKGS/dkms_*.deb || true
+      dpkg --root /target -i \
+        $PKGS/linux-headers-6.8.0-100_6.8.0-100.100_all.deb \
+        $PKGS/linux-headers-6.8.0-100-generic_6.8.0-100.100_amd64.deb \
+        $PKGS/linux-libc-dev_6.8.0-100.100_amd64.deb \
+        $PKGS/linux-modules-6.8.0-100-generic_6.8.0-100.100_amd64.deb \
+        $PKGS/binutils-common_*.deb $PKGS/binutils_*.deb \
+        $PKGS/binutils-x86-64-linux-gnu_*.deb $PKGS/libbinutils_*.deb \
+        $PKGS/libctf-nobfd0_*.deb $PKGS/libctf0_*.deb \
+        $PKGS/libgprofng0_*.deb $PKGS/libsframe1_*.deb \
+        $PKGS/libgcc-s1_*.deb $PKGS/libgcc-13-dev_*.deb \
+        $PKGS/gcc-13-base_*.deb $PKGS/gcc-13_*.deb $PKGS/cpp-13_*.deb \
+        $PKGS/libstdc++6_*.deb $PKGS/libstdc++-13-dev_*.deb \
+        $PKGS/libisl23_*.deb $PKGS/libmpc3_*.deb $PKGS/libmpfr6_*.deb \
+        $PKGS/libc-dev-bin_*.deb $PKGS/libc6-dev_*.deb \
+        $PKGS/libcrypt-dev_*.deb $PKGS/rpcsvc-proto_*.deb \
+        $PKGS/make_*.deb $PKGS/build-essential_*.deb \
+        $PKGS/perl-base_*.deb $PKGS/kmod_*.deb $PKGS/libkmod2_*.deb || true
+      dpkg --root /target -i $PKGS/dkms_*.deb $PKGS/broadcom-sta-dkms_*.deb || true
       chroot /target dkms add broadcom-sta/6.30.223.271 || true
       chroot /target dkms build broadcom-sta/6.30.223.271 -k "$KVER" || true
       chroot /target dkms install broadcom-sta/6.30.223.271 -k "$KVER" || true
@@ -156,19 +173,7 @@ autoinstall:
       WIFI_IFACE=$(ip link show | grep -oE 'wlp[^:]+' | head -1 || ip link show | grep -oE 'wlan[0-9]+' | head -1)
       WIFI_IFACE=${WIFI_IFACE:-wlan0}
       mkdir -p /target/etc/netplan
-      cat > /target/etc/netplan/01-wifi.yaml << EOF
-      network:
-        version: 2
-        wifis:
-          ${WIFI_IFACE}:
-            match:
-              driver: wl
-            dhcp4: true
-            optional: true
-            access-points:
-              "ATTj6pXatS":
-                password: "j75b39=z?mpg"
-      EOF
+      printf 'network:\n  version: 2\n  wifis:\n    %s:\n      match:\n        driver: wl\n      dhcp4: true\n      optional: true\n      access-points:\n        "ATTj6pXatS":\n          password: "j75b39=z?mpg"\n' "$WIFI_IFACE" > /target/etc/netplan/01-wifi.yaml
       chmod 600 /target/etc/netplan/01-wifi.yaml
     - |
       sed -i 's/^hosts:.*/hosts: files mdns_minimal [NOTFOUND=return] dns/' /target/etc/nsswitch.conf

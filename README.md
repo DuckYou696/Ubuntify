@@ -51,9 +51,7 @@ cd macpro-monitor && ./start.sh
 
 ### 4. Boot Mac Pro
 
-Hold Option key → select Ubuntu installer. GRUB will auto-select the autoinstall entry after 30s.
-
-**Important:** If booting manually, add kernel parameters:
+Hold Option key → select Ubuntu installer. At the GRUB menu, press `e` to edit the default boot entry and add kernel parameters to the `linux` line:
 ```
 autoinstall ds=nocloud nomodeset amdgpu.si.modeset=0
 ```
@@ -77,13 +75,7 @@ The stock Ubuntu 24.04.4 Server ISO does NOT include:
 
 These must be included on the ISO because without WiFi, the installer cannot download them from the internet.
 
-The ISO DOES include in its pool (no need to include separately):
-- `linux-headers-6.8.0-100*` — matching kernel headers
-- `linux-modules-6.8.0-100-generic` — kernel modules
-- `binutils`, `libc6-dev` — base build tools
-- `wpasupplicant`, `avahi-daemon` — network utilities
-
-We include all needed debs in `packages/` for simplicity, even those available in the ISO pool, to avoid fragile dependency resolution against deep pool paths.
+We include all needed debs in `packages/` for simplicity, even those that might exist in the ISO pool, to avoid fragile dependency resolution against deep pool paths.
 
 ### autoinstall.yaml Key Sections
 
