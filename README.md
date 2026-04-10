@@ -21,6 +21,7 @@ Boot ISO → early-commands install packages from /cdrom/macpro-pkgs/ → compil
 | `autoinstall.yaml` | Ubuntu autoinstall configuration |
 | `build-iso.sh` | Builds modified ISO from stock Ubuntu ISO + autoinstall.yaml + packages |
 | `packages/` | .deb files needed to compile and install WiFi driver (~36 packages, ~75MB) |
+| `prereqs/` | Stock Ubuntu 24.04.4 Server ISO (gitignored: `*.iso`) |
 | `macpro-monitor/` | Node.js webhook server for headless install monitoring |
 
 ## Quick Start
@@ -75,31 +76,38 @@ The stock Ubuntu 24.04.4 Server ISO does NOT include:
 
 These must be included on the ISO because without WiFi, the installer cannot download them from the internet.
 
-We include all needed debs in `packages/` for simplicity, even those that might exist in the ISO pool, to avoid fragile dependency resolution against deep pool paths.
+We include all needed debs in `packages/` to avoid fragile dependency resolution against deep ISO pool paths.
 
 ### autoinstall.yaml Key Sections
 
-**early-commands** (runs before network config):
+**early-commands** (runs before network config, in the installer environment):
 1. Installs kernel headers and modules from `/cdrom/macpro-pkgs/`
 2. Installs build toolchain (gcc, make, binutils, libc-dev, etc.)
 3. Installs `broadcom-sta-dkms` and `dkms`
-4. Compiles `wl.ko` via DKMS against running kernel
+4. Compiles `wl.ko` via DKMS against the running kernel (6.8.0-100-generic)
 5. Loads driver with `modprobe wl`
-6. Waits for WiFi interface to appear
+6. Verifies module loaded (`lsmod | grep wl`)
+7. Waits for WiFi interface to appear (up to 30 seconds)
 
-**network**: Matches any interface with `driver: wl`, connects to configured WiFi
+**network**: Uses `wl0` interface with `match: driver: wl`, connects to configured WiFi
 
-**late-commands** (runs after install):
-- Installs DKMS driver into target system (persists across reboots)
-- Writes netplan WiFi config for target system
-- Pins kernel version to prevent breakage
-- Configures mDNS for `macpro-linux.local` hostname resolution
+**late-commands** (runs after install, installs into target system):
+1. Installs kernel headers, build toolchain, and DKMS into `/target` in 4 dependency-ordered stages
+2. Compiles `wl.ko` via DKMS in the target chroot (ensures persistence across reboots)
+3. Writes netplan WiFi config for target system
+4. Pins kernel version to 6.8.0-100 via `apt-mark hold`
+5. Configures mDNS for `macpro-linux.local` hostname resolution
+6. Saves install logs to `/var/log/macpro-install/`
 
 **error-commands**: Attempts to load driver and send webhook notification on failure
 
 ### AMD FirePro GPU
 
-Mac Pro 2013 uses AMD FirePro D300/D500/D700. The `amdgpu` driver is built into the kernel. No additional GPU driver compilation needed — only the kernel parameters `nomodeset amdgpu.si.modeset=0` in GRUB.
+Mac Pro 2013 uses AMD FirePro D300/D500/D700. The `amdgpu` driver is built into the kernel. No additional GPU driver needed — only the kernel parameters `nomodeset amdgpu.si.modeset=0` in GRUB.
+
+### Storage
+
+The autoinstall targets `/dev/sda` — Mac Pro 2013 uses Apple PCIe SSDs connected via AHCI (not NVMe), so the internal SSD appears as `/dev/sda`.
 
 ## Configuration
 
@@ -107,27 +115,23 @@ Edit `autoinstall.yaml` to change:
 
 | Setting | Location | Default |
 |---------|----------|---------|
-| WiFi SSID | `network.wifis` | `ATTj6pXatS` |
-| WiFi password | `network.wifis` | `j75b39=z?mpg` |
+| WiFi SSID | `network.wifis.wl0.access-points` | `ATTj6pXatS` |
+| WiFi password | `network.wifis.wl0.access-points` | `j75b39=z?mpg` |
 | Hostname | `identity.hostname` | `macpro-linux` |
 | Username | `identity.username` | `teja` |
 | SSH keys | `ssh.authorized-keys` | 4 keys |
-| Webhook URL | `reporting` | `http://192.168.1.115:8080/webhook` |
+| Webhook URL | `reporting.macpro-monitor.endpoint` | `http://192.168.1.115:8080/webhook` |
 
 ## Updating Packages
 
 If you need to refresh the `packages/` directory (e.g., for a different kernel version):
 
 ```bash
-# Extract from fresh ISO:
-7z e prereqs/ubuntu-24.04.4-live-server-amd64.iso -o/tmp/extract \
-    'pool/main/l/linux/linux-headers-6.8.0-100*_*' \
-    'pool/main/b/binutils/*' \
-    'pool/main/g/glibc/libc-dev*_*' \
-    'pool/main/g/glibc/libc6-dev_*' -y
-
-# Download missing packages (dkms, broadcom-sta, gcc, make, etc.)
-# from http://packages.ubuntu.com/noble/
+# Download packages from Ubuntu packages archive
+# For kernel 6.8.0-100-generic, you need:
+# - linux-headers-6.8.0-100 (all + generic)
+# - broadcom-sta-dkms, dkms
+# - gcc-13, make, build-essential, and all build dependencies
 ```
 
 ## Troubleshooting

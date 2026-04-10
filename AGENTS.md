@@ -21,7 +21,7 @@ Automated Ubuntu 24.04.4 LTS Server installer for headless Mac Pro 2013 (MacPro6
 │   ├── server.js
 │   ├── start.sh / stop.sh / reset.sh
 │   └── logs/
-└── prereqs/                         # Stock Ubuntu ISO (gitignored)
+└── prereqs/                         # Stock Ubuntu ISO (*.iso gitignored)
 ```
 
 ## Build/Lint/Test Commands
@@ -41,11 +41,13 @@ cd macpro-monitor && ./start.sh    # Start (port 8080)
 
 1. **Minimal ISO modification**: Only `autoinstall.yaml` and `packages/` directory are added via `xorriso -map`. EFI boot structure is preserved with `-boot_image any keep`. No initrd hacking, no kernel swapping, no driver pre-compilation.
 
-2. **Compile during install**: The `early-commands` section installs kernel headers and build tools from `/cdrom/macpro-pkgs/`, then compiles `wl.ko` via DKMS against the running kernel. This avoids kernel version mismatches since compilation happens against the actual booted kernel.
+2. **Compile during install**: The `early-commands` section installs kernel headers and build tools from `/cdrom/macpro-pkgs/`, then compiles `wl.ko` via DKMS against the running kernel. The `late-commands` section repeats this in a 4-stage `dpkg --root /target` install to ensure the driver persists in the target system.
 
 3. **GPU**: AMD FirePro uses built-in `amdgpu` driver. Only `nomodeset amdgpu.si.modeset=0` kernel params needed (set in GRUB at boot time, not baked into ISO).
 
-4. **Network matching**: Uses `match: driver: wl` in netplan to handle variable interface names (wlan0, wlp2s0, etc).
+4. **Network matching**: Uses `wl0` interface ID with `match: driver: wl` in netplan to handle variable interface names. The late-commands generates a netplan config using the detected interface name with `printf` (not heredoc, to avoid YAML indentation issues).
+
+5. **Storage**: Mac Pro 2013 uses Apple PCIe SSDs connected via AHCI (not NVMe), so the internal disk appears as `/dev/sda`.
 
 ## Code Style Guidelines
 
@@ -61,7 +63,8 @@ Use `RED`, `GREEN`, `NC` color constants. Log to file with `tee`.
 ### YAML (autoinstall.yaml)
 - Use `|` block scalar for shell commands to avoid YAML parsing issues
 - Quote all strings containing special characters
-- Use `driver: wl` matching, not hardcoded interface names
+- Use `match: driver: wl` with a logical interface ID (e.g., `wl0:`), not hardcoded interface names
+- Use `printf` for netplan YAML generation (not heredoc — indentation inside `|` blocks adds unwanted spaces)
 
 ### JavaScript (Node.js)
 ```javascript
@@ -94,4 +97,12 @@ function escapeHtml(str) {
 - `autoinstall.yaml` - The core autoinstall configuration (added to ISO at /)
 - `packages/` - .deb files for driver compilation (added to ISO at /macpro-pkgs/)
 - `build-iso.sh` - ISO build script using xorriso
-- `.gitignore` - Excludes `prereqs/`, `*.iso`, `ssh-*/`, `.sisyphus/`
+- `prereqs/` - Stock Ubuntu ISO directory (only `*.iso` files, gitignored)
+- `.gitignore` - Excludes `*.iso`, `*.qcow2`, `ssh-*/`, `.sisyphus/`, `.DS_Store`
+
+## Key Constraints
+
+- Kernel version is hardcoded to `6.8.0-100-generic` — must match the ISO's kernel
+- DKMS cross-kernel build: `dkms build -k <version>` compiles against the specified kernel's headers, not the running kernel
+- `dpkg --root /target` packages must be installed in dependency order (Stage 1: headers → Stage 2: libs → Stage 3: tools → Stage 4: dkms)
+- Netplan interface keys must be actual names or logical IDs (not `wifi-iface`)

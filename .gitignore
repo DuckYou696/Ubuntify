@@ -1,6 +1,3 @@
-# Prerequisites - large binaries (ISOs, deb packages)
-prereqs/
-
 # Build output
 *.iso
 *.qcow2
@@ -20,6 +17,3 @@ node_modules/
 macpro-monitor/server.log
 macpro-monitor/server.pid
 macpro-monitor/logs/
-
-# Extracted ISO contents
-extracted/
