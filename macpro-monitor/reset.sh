@@ -1,17 +1,16 @@
 #!/bin/bash
-
-pw=$(security find-generic-password -a "$USER" -s "TSudo" -w)
-
-# Exit if the password couldn't be retrieved
-if [ -z "$pw" ]; then
-    echo "Error: Password not found in Keychain."
-    exit 1
-fi
-
+set -e
 cd "$(dirname "$0")" || exit
 
-echo "$pw" | sudo -S ./stop.sh 2>/dev/null || true
-echo "$pw" | sudo -S pkill -f "node server.js" 2>/dev/null || true
-echo "$pw" | sudo -S rm -rf ./logs ./server.pid ./server.log
+if [ -f server.pid ] && kill -0 "$(cat server.pid)" 2>/dev/null; then
+    echo "Stopping existing server..."
+    kill "$(cat server.pid)" 2>/dev/null || true
+    rm -f server.pid
+    sleep 1
+fi
 
-unset pw
+pkill -f "node server.js" 2>/dev/null || true
+
+rm -rf ./logs ./server.pid ./server.log
+
+echo "Monitor reset complete"
