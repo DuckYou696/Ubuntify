@@ -25,10 +25,17 @@ cleanup_on_error() {
         error "Script exited with code $EXIT_CODE — attempting to restore macOS boot device..."
         # Re-set macOS as boot device so machine doesn't get stuck
         # on a broken ESP after a failed deploy
-        local MACOS_VOLUME="/"
-        if [ -d "$MACOS_VOLUME" ]; then
+        # Use the APFS container volume instead of root filesystem
+        local MACOS_VOLUME
+        MACOS_VOLUME=$(diskutil info "$APFS_CONTAINER" 2>/dev/null | grep "Mount Point" | awk '{print $NF}' || echo "/")
+        if [ -d "$MACOS_VOLUME" ] && [ "$MACOS_VOLUME" != "/" ]; then
             bless --mount "$MACOS_VOLUME" --setBoot 2>/dev/null && \
                 warn "macOS boot device restored via bless" || \
+                error "Could not restore macOS boot device — manual intervention required"
+        else
+            # Fallback to root if APFS container mount point not found
+            bless --mount / --setBoot 2>/dev/null && \
+                warn "macOS boot device restored via bless (root fallback)" || \
                 error "Could not restore macOS boot device — manual intervention required"
         fi
         error "Deployment failed. macOS boot device should still be active."
@@ -130,7 +137,7 @@ log "Free space after resize: ${FREE_START:-unknown}"
 # Find the newly created partition using before/after diffing
 # This is safer than 'tail -1' which could pick the wrong partition on re-run
 BEFORE_PARTS=$(diskutil list "$INTERNAL_DISK" | grep -oE 'disk[0-9]+s[0-9]+' | sort)
-diskutil addPartition "$INTERNAL_DISK" %noformat% %noformat% "$ESP_SIZE" || die "Failed to create ESP partition"
+diskutil addPartition "$INTERNAL_DISK" %noformat% "$ESP_NAME" "$ESP_SIZE" || die "Failed to create ESP partition"
 sleep 2
 AFTER_PARTS=$(diskutil list "$INTERNAL_DISK" | grep -oE 'disk[0-9]+s[0-9]+' | sort)
 ESP_DEVICE=$(comm -13 <(echo "$BEFORE_PARTS") <(echo "$AFTER_PARTS") | head -1)
@@ -312,9 +319,9 @@ echo "To monitor: start webhook monitor on MacBook"
 echo "  cd macpro-monitor && ./start.sh"
 echo ""
 echo "To cancel: reset NVRAM boot device"
-echo "  bless --mount / --setBoot  # reset to macOS"
+echo "  sudo bless --mount '/Volumes/Macintosh HD' --setBoot  # reset to macOS"
 echo ""
-if [ -t 0 ]; then
+if [ -t 0 ] && [ "${DEPLOY_HEADLESS:-}" != "1" ]; then
     read -p "Reboot now? (yes/no): " CONFIRM
     if [ "$CONFIRM" = "yes" ]; then
         log "Rebooting..."
