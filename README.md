@@ -49,6 +49,19 @@ The autoinstall config compiles the WiFi driver, starts SSH for remote debugging
 | `prereqs/` | Stock Ubuntu 24.04.4 Server ISO (`*.iso` gitignored) |
 | `macpro-monitor/` | Node.js webhook server for headless install monitoring (3-pane dashboard) |
 
+## Prerequisites
+
+### macOS (build/deploy machine)
+- **Python 3** — for dynamic storage config generation (`python3` in PATH)
+- **xorriso** — ISO repackaging (`brew install xorriso`)
+- **gptfdisk** — GPT partition table manipulation (`brew install gptfdisk`, provides `sgdisk`)
+- **diskutil** — built-in macOS tool (no install needed)
+- **hdiutil** — built-in macOS tool (no install needed)
+
+```bash
+brew install xorriso gptfdisk python3
+```
+
 ## Quick Start
 
 ### USB Boot (Requires Physical Access)
@@ -152,13 +165,13 @@ All patches use `#if LINUX_VERSION_CODE >= KERNEL_VERSION(...)` guards and compi
 **early-commands** (runs before network config, in the installer environment):
 1. Detects running kernel version dynamically (`KVER="$(uname -r)"`) — no hardcoded version
 2. Validates kernel headers exist for running kernel; exits if not found
-3. Installs kernel headers from `/cdrom/macpro-pkgs/`
+3. Installs kernel headers from discovered `macpro-pkgs/` mount point
 4. Installs build toolchain (gcc, make, binutils, libc-dev, etc.)
 5. Installs `broadcom-sta-dkms` and `dkms` (dpkg postinst auto-runs `dkms add`, creating a symlink)
-6. Applies 6 DKMS patches from `/cdrom/macpro-pkgs/dkms-patches/` for kernel 6.8+ compatibility (patches modify `/usr/src/`, visible through the DKMS symlink); exits if patches are missing
+6. Applies 6 DKMS patches from `macpro-pkgs/dkms-patches/` (discovered mount point) for kernel 6.8+ compatibility (patches modify `/usr/src/`, visible through the DKMS symlink); exits if patches are missing or fail to apply
 7. Compiles `wl.ko` via DKMS against the detected kernel (`dkms build` + `dkms install`), with single-retry fallback
 8. Loads driver with `modprobe wl`; exits if module fails to load (WiFi is critical)
-9. Waits for WiFi interface to appear (up to 60 seconds, checks `wlp*`, `wl*`, `wlan*`, `enp*`, `eno*` patterns); exits if no interface found
+9. Waits for WiFi interface to appear (up to 60 seconds, checks `wlp*`, `wl*`, `wlan*` patterns, plus WiFi association and DHCP checks); exits if no interface found
 10. Verifies WiFi connectivity with a network test; exits if WiFi isn't functional (prevents storage from modifying the disk when there's no network path)
 11. Starts SSH server — tries `apt-get install openssh-server` first, falls back to ISO pool `.deb`s with `--force-depends`
 
@@ -174,7 +187,7 @@ Each step sends a progress webhook with `{progress, stage, status, message}` to 
 3. Installs kernel headers, build toolchain, and DKMS into `/target` in 4 dependency-ordered stages (all fatal on failure)
 4. Installs `broadcom-sta-dkms` (postinst auto-runs `dkms add`), applies DKMS patches, then compiles `wl.ko` via DKMS in the target chroot with `/proc`, `/sys`, `/dev` bind-mounted (ensures persistence across reboots); single-retry fallback on build failure
 5. Writes netplan WiFi config for target system (uses `printf` to avoid heredoc indentation issues, `networkd` renderer with `wpa_supplicant` for WiFi)
-6. Configures `wl` driver power management off (`options wl` in `/etc/modprobe.d/`, `iwconfig power off`) and `cfg80211` regulatory domain `US`
+6. Configures `wl` driver power management off (`options wl` in `/etc/modprobe.d/`, `iwconfig power off` via systemd service `wl-poweroff.service`) and `cfg80211` regulatory domain `US`
 7. Configures GRUB: custom kernel params (`nomodeset amdgpu.si.modeset=0`), macOS boot entry via `fwsetup` (GRUB cannot read APFS, so `search --file` doesn't work — `fwsetup` reboots to Apple Boot Manager), os-prober enabled, `efibootmgr` installed, `/usr/local/bin/boot-macos` helper script
 8. Pins kernel and headers to `$KVER` via `apt-mark hold` (dynamic, not hardcoded)
 9. Configures mDNS for `macpro-linux.local` hostname resolution
@@ -213,7 +226,7 @@ The autoinstall targets `/dev/sda` — Mac Pro 2013 uses Apple PCIe SSDs connect
 
 | Direction | Method | Command |
 |-----------|--------|---------|
-| macOS → Ubuntu | `bless` | `bless --setBoot --mount /Volumes/ESP --nextonly` then reboot |
+| macOS → Ubuntu | `bless` | `bless --setBoot --mount /Volumes/cidata --nextonly` then reboot |
 | Ubuntu → macOS | `efibootmgr` | `sudo boot-macos` then reboot |
 | Ubuntu → macOS | GRUB menu | Select "Reboot to Apple Boot Manager" at GRUB boot |
 | Any → macOS | Firmware | Hold Option at boot (requires physical access) |
@@ -260,12 +273,15 @@ The `prepare-headless-deploy.sh` script automates steps 3-13.
 
 If the installer fails or the partition setup is wrong, the Mac Pro becomes unreachable — no SSH, no monitor, no keyboard. With the dual-boot configuration, macOS is **preserved** — all existing partitions are marked `preserve: true` in the autoinstall storage config. If Ubuntu installation fails in late-commands, macOS remains intact and `bless --nextonly` will revert the boot device on the next reboot.
 
-The `--nextonly` flag ensures the boot device reverts to macOS if the installer boot fails (corrupt ESP, missing GRUB). With dual-boot, this protection is even stronger — macOS survives even a successful Ubuntu install, so you can always boot back into macOS.
+**Important: `bless --nextonly` limitation** — The `--nextonly` flag only reverts to macOS if the firmware **cannot find a valid bootloader** on the ESP. If GRUB loads successfully from the ESP but the kernel panics afterward, the `--nextonly` flag is already consumed and the Mac Pro will attempt to boot from the ESP again on subsequent reboots. To recover: SSH into the installer environment (SSH is started in `early-commands`) and run `bless --mount "/Volumes/Macintosh HD" --setBoot` to restore macOS boot.
+
+**Recovery mode** — If `late-commands` verification detects that the target system's WiFi is broken (missing `wl.ko` module or netplan config), the installer enters recovery mode instead of rebooting. It keeps the SSH server running and blocks the reboot with an infinite sleep loop. This prevents a "headless brick" where the installed system boots but has no network access. You can SSH into the installer and manually fix the target system before rebooting.
 
 Mitigations:
 - **Dual-boot preservation** — macOS survives the install; `preserve: true` on all existing partitions prevents curtin from deleting them
 - **WiFi connectivity circuit breaker** — `early-commands` verifies WiFi actually works before storage proceeds; aborts with `exit 1` if WiFi isn't functional
-- **`bless --nextonly`** — boot device falls back to macOS if the ESP boot files fail
+- **`bless --nextonly`** — boot device falls back to macOS if the firmware cannot find a valid bootloader on the ESP
+- **Recovery mode** — if target WiFi is broken, installer blocks reboot and keeps SSH alive for debugging
 - **Webhook monitoring** — receive real-time status updates at each installation stage with progress percentages (2-100%)
 - **SSH into installer** — debug during installation before target system is written
 - **UFW firewall** — target system denies all incoming except SSH (WiFi credentials are in git)
@@ -321,6 +337,10 @@ Edit `autoinstall.yaml` to change:
 | Webhook URL | `reporting.macpro-monitor.endpoint` | `http://192.168.1.115:8080/webhook` |
 | Reporting level | `reporting.macpro-monitor.level` | `DEBUG` (captures all Subiquity events) |
 
+### Security: WiFi Credentials
+
+WiFi SSID and password are stored in plain text in `autoinstall.yaml` (committed to git) and on the FAT32 ESP (unencrypted, locally accessible). Mitigations: UFW firewall denies all incoming except SSH, ESP is only accessible during install, and the repository should be private. Future improvement: inject WiFi credentials via environment variable at deploy time instead of committing to git.
+
 ## Updating Packages
 
 If you need to refresh the `packages/` directory (e.g., for a different kernel version):
@@ -333,7 +353,7 @@ If you need to refresh the `packages/` directory (e.g., for a different kernel v
 # - broadcom-sta-dkms, dkms
 # - gcc-13, make, build-essential, and all build dependencies
 # The autoinstall config detects the running kernel dynamically via KVER="$(uname -r)"
-# and validates that matching headers exist in /cdrom/macpro-pkgs/
+# and validates that matching headers exist in the discovered macpro-pkgs/ path
 ```
 
 ## Troubleshooting
@@ -343,7 +363,7 @@ If you need to refresh the `packages/` directory (e.g., for a different kernel v
 dmesg | grep -i 'dkms\|wl\|broadcom'
 cat /run/macpro.log
 # Check that kernel headers match running kernel:
-ls /cdrom/macpro-pkgs/linux-headers-$(uname -r)_*.deb
+ls /macpro-pkgs/linux-headers-$(uname -r)_*.deb 2>/dev/null || ls /cdrom/macpro-pkgs/linux-headers-$(uname -r)_*.deb 2>/dev/null
 # Check DKMS patch application:
 cat /var/log/macpro-install/macpro.log | grep -i patch
 # Verify DKMS symlink exists:
@@ -373,7 +393,7 @@ sudo boot-macos    # uses efibootmgr to set macOS as next boot
 # Or at GRUB boot menu, select "Reboot to Apple Boot Manager"
 
 # From macOS, to switch back to Ubuntu:
-bless --setBoot --mount /Volumes/ESP --nextonly
+bless --setBoot --mount /Volumes/cidata --nextonly
 sudo reboot
 ```
 
