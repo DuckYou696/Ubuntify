@@ -525,15 +525,15 @@ autoinstall:
       chmod 600 /target/etc/netplan/01-wifi.yaml
       if command -v netplan 2>/dev/null >/dev/null; then
         if ! netplan generate 2>>/run/macpro.log; then
-          echo "[late] WARN: netplan generate failed, regenerating from known-good template..." >> /run/macpro.log
+          echo "[late] WARN: netplan generate failed, attempting simplified config..." >> /run/macpro.log
           rm -f /target/etc/netplan/01-wifi.yaml
-          printf 'network:\n  version: 2\n  renderer: networkd\n  wifis:\n    wl0:\n      match:\n        driver: wl\n      dhcp4: true\n      optional: true\n      access-points:\n        "ATTj6pXatS":\n          password: "j75b39=z?mpg"\n' > /target/etc/netplan/01-wifi.yaml
+          printf 'network:\n  version: 2\n  renderer: networkd\n  wifis:\n    wl0:\n      dhcp4: true\n      optional: true\n      access-points:\n        "ATTj6pXatS":\n          password: "j75b39=z?mpg"\n' > /target/etc/netplan/01-wifi.yaml
           chmod 600 /target/etc/netplan/01-wifi.yaml
           if ! netplan generate 2>>/run/macpro.log; then
-            echo "[late] FATAL: netplan generate failed even after regeneration" >> /run/macpro.log
+            echo "[late] FATAL: netplan generate failed even with simplified config" >> /run/macpro.log
             exit 1
           fi
-          echo "[late] Netplan regenerated successfully from fallback template" >> /run/macpro.log
+          echo "[late] Netplan regenerated with simplified config (no match clause)" >> /run/macpro.log
         fi
       fi
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":73,"stage":"late-netplan","status":"configured","message":"WiFi netplan config written"}' > /dev/null 2>&1 || true
