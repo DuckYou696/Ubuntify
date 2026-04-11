@@ -47,6 +47,16 @@ touch "$STAGING/iso_root/cidata/vendor-data"
 mkdir -p "$STAGING/iso_root/macpro-pkgs"
 cp "$PKGS_DIR"/*.deb "$STAGING/iso_root/macpro-pkgs/"
 
+# Copy DKMS patches for broadcom-sta kernel 6.8+ compatibility
+if [ -d "${PKGS_DIR}/dkms-patches" ] && [ "$(ls "${PKGS_DIR}/dkms-patches/"*.patch 2>/dev/null | wc -l)" -gt 0 ]; then
+    mkdir -p "$STAGING/iso_root/macpro-pkgs/dkms-patches"
+    cp "${PKGS_DIR}/dkms-patches/"*.patch "${PKGS_DIR}/dkms-patches/series" "$STAGING/iso_root/macpro-pkgs/dkms-patches/"
+    PATCH_COUNT=$(ls "${PKGS_DIR}/dkms-patches/"*.patch 2>/dev/null | wc -l | tr -d ' ')
+    echo "DKMS patches: $PATCH_COUNT patches for kernel 6.8+ compatibility"
+else
+    echo -e "${YELLOW}WARN${NC}: No DKMS patches found in ${PKGS_DIR}/dkms-patches/"
+fi
+
 cat > "$STAGING/grub.cfg" << 'GRUBEOF'
 set default=0
 set timeout=3
@@ -99,7 +109,7 @@ echo ""
 echo "[5/5] Verifying ISO contents and boot images..."
 
 echo "Verifying files:"
-for file in /autoinstall.yaml /cidata/user-data /cidata/meta-data /macpro-pkgs/ /EFI/boot/grub.cfg /boot/grub/grub.cfg; do
+for file in /autoinstall.yaml /cidata/user-data /cidata/meta-data /macpro-pkgs/ /macpro-pkgs/dkms-patches/ /EFI/boot/grub.cfg /boot/grub/grub.cfg; do
     if xorriso -indev "$OUTPUT_ISO" -ls "$file" >/dev/null 2>&1; then
         echo -e "  ${GREEN}OK${NC}: $file"
     else

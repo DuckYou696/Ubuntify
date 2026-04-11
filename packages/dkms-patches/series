@@ -1,0 +1,6 @@
+29-fix-version-parsing.patch
+30-6.12-unaligned-header-location.patch
+31-build-Provide-local-lib80211.h-header.patch
+32-Prepare-for-6.14.0-rc6.patch
+38-build-don-t-use-deprecated-EXTRA_-FLAGS.patch
+39-wl-use-timer_delete-for-kernel-6.15.patch
