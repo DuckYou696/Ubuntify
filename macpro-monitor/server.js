@@ -17,6 +17,7 @@ const STALL_WARNING_MS = 5 * 60 * 1000;
 const STALL_ERROR_MS = 15 * 60 * 1000;
 
 const rateLimitMap = new Map();
+const RATE_LIMIT_MAX_ENTRIES = 1000;
 
 // Progress data
 let data = {
@@ -584,11 +585,22 @@ const server = http.createServer((req, res) => {
 
 load();
 
+process.on('uncaughtException', (err) => {
+    console.error('[FATAL] Uncaught exception:', err.message);
+    save();
+    process.exit(1);
+});
+
 setInterval(() => {
     checkStalled();
     const now = Date.now();
     for (const [ip, entry] of rateLimitMap) {
         if (now - entry.windowStart > 60000) rateLimitMap.delete(ip);
+    }
+    if (rateLimitMap.size > RATE_LIMIT_MAX_ENTRIES) {
+        const entries = [...rateLimitMap.entries()].sort((a, b) => a[1].windowStart - b[1].windowStart);
+        const toRemove = entries.slice(0, entries.length - RATE_LIMIT_MAX_ENTRIES);
+        toRemove.forEach(([ip]) => rateLimitMap.delete(ip));
     }
 }, 60000);
 
