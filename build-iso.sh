@@ -30,11 +30,12 @@ echo "Packages to include: $PKG_COUNT"
 
 echo ""
 echo "[1/5] Cleaning and preparing staging area..."
-rm -rf "$STAGING"
+rm -rf "$STAGING" 2>/dev/null || sudo rm -rf "$STAGING"
 mkdir -p "$STAGING/iso_root"
 
 echo "[2/5] Extracting original ISO contents..."
 xorriso -osirrox on -indev "$BASE_ISO" -extract / "$STAGING/iso_root/"
+chmod -R u+w "$STAGING/iso_root"
 
 echo "[3/5] Overlaying custom files..."
 
@@ -99,8 +100,9 @@ echo "  ... (preserving original boot structure)"
 # Rebuild ISO using extracted boot parameters
 # The -V "cidata" sets the volume label for NoCloud discovery
 # BOOT_PARAMS preserves MBR, EFI partition image, and El Torito boot entries
-# Parse BOOT_PARAMS into array to avoid eval injection risk
-read -ra BOOT_ARRAY <<< "$BOOT_PARAMS"
+BOOT_PARAMS_FILE="$STAGING/boot_params.sh"
+printf 'BOOT_ARRAY=( %s )\n' "$BOOT_PARAMS" > "$BOOT_PARAMS_FILE"
+source "$BOOT_PARAMS_FILE"
 xorriso -as mkisofs \
     "${BOOT_ARRAY[@]}" \
     -V "cidata" \
