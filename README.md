@@ -43,7 +43,8 @@ The autoinstall config compiles the WiFi driver, starts SSH for remote debugging
 |------|---------|
 | `autoinstall.yaml` | Ubuntu autoinstall configuration — WiFi driver compilation, SSH, storage layout |
 | `build-iso.sh` | Builds modified ISO: extracts original, overlays custom files, repacks preserving EFI boot |
-| `packages/` | .deb files needed to compile and install WiFi driver (~36 packages, ~75MB) |
+| `packages/` | .deb files needed to compile and install WiFi driver (~37 packages, ~75MB) |
+| `packages/dkms-patches/` | 6 DKMS patches for kernel 6.8+ compatibility (series file + *.patch) |
 | `prepare-headless-deploy.sh` | macOS-side script: repartition, extract ISO to ESP, bless, verify, reboot |
 | `prereqs/` | Stock Ubuntu 24.04.4 Server ISO (`*.iso` gitignored) |
 | `macpro-monitor/` | Node.js webhook server for headless install monitoring (3-pane dashboard) |
@@ -108,49 +109,68 @@ cd macpro-monitor && ./start.sh
 
 ### What's Added to the ISO
 
-The build process extracts the original ISO, overlays custom files, then repacks using the original boot parameters (preserved via `xorriso -report_el_torito as_mkisofs`). Five things are overlaid:
+The build process extracts the original ISO, overlays custom files, then repacks using the original boot parameters (preserved via `xorriso -report_el_torito as_mkisofs`). Six things are overlaid:
 
 1. `/autoinstall.yaml` — installation configuration
 2. `/cidata/` — NoCloud datasource (`user-data`, `meta-data`, `vendor-data`) for `ds=nocloud` discovery
-3. `/macpro-pkgs/` — flat directory of ~36 .deb files for driver compilation
-4. `/EFI/boot/grub.cfg` and `/boot/grub/grub.cfg` — GRUB config with pre-baked `autoinstall ds=nocloud nomodeset amdgpu.si.modeset=0` kernel parameters (no manual keyboard input needed)
-5. Volume label `cidata` — for NoCloud datasource discovery
+3. `/macpro-pkgs/` — flat directory of ~37 .deb files for driver compilation
+4. `/macpro-pkgs/dkms-patches/` — 6 DKMS compatibility patches for broadcom-sta on kernel 6.8+ (with `series` file for ordered application)
+5. `/EFI/boot/grub.cfg` and `/boot/grub/grub.cfg` — GRUB config with pre-baked `autoinstall ds=nocloud nomodeset amdgpu.si.modeset=0` kernel parameters (no manual keyboard input needed)
+6. Volume label `cidata` — for NoCloud datasource discovery
 
 ### Why Packages Must Be Included
 
 The stock Ubuntu 24.04.4 Server ISO does NOT include:
 - `dkms` — Dynamic Kernel Module Support framework
-- `broadcom-sta-dkms` — Broadcom WiFi driver source
+- `broadcom-sta-dkms` — Broadcom WiFi driver source (requires patches for kernel 6.8+)
 - `make`, `gcc-13`, `build-essential` — compilation toolchain
 - `perl-base`, `kmod`, `fakeroot` — DKMS dependencies
 
 These must be included on the ISO because without WiFi, the installer cannot download them from the internet.
 
-We include all needed debs in `packages/` to avoid fragile dependency resolution against deep ISO pool paths.
+We include all needed debs in `packages/` and DKMS patches in `packages/dkms-patches/` to avoid fragile dependency resolution against deep ISO pool paths.
+
+### DKMS Patch Architecture
+
+The `broadcom-sta-dkms` package (version `6.30.223.271-23ubuntu1`) does not compile cleanly on kernel 6.8+. Six patches are applied during installation to resolve compatibility issues:
+
+| Patch | Purpose | Kernel Threshold |
+|-------|---------|-----------------|
+| 29-fix-version-parsing.patch | Fix 2-component kernel version parsing | All 6.x |
+| 30-6.12-unaligned-header-location.patch | `asm/unaligned.h` → `linux/unaligned.h` | 6.12+ |
+| 31-build-Provide-local-lib80211.h-header.patch | Local `lib80211.h` (removed from kernel) | 6.13+ |
+| 32-Prepare-for-6.14.0-rc6.patch | `wl_cfg80211_get_tx_power` gets `link_id` param | 6.14+ |
+| 38-build-don-t-use-deprecated-EXTRA_-FLAGS.patch | `EXTRA_CFLAGS` → `ccflags-y` | 6.15+ |
+| 39-wl-use-timer_delete-for-kernel-6.15.patch | `del_timer` → `timer_delete` | 6.15+ |
+
+All patches use `#if LINUX_VERSION_CODE >= KERNEL_VERSION(...)` guards and compile cleanly on 6.8 while enabling forward compatibility. Patches are applied via a `series` file in dependency order.
+
+**Important**: `dkms add` is automatically called by the `broadcom-sta-dkms` package postinst (via `dh-dkms` debhelper). It creates a **symlink** from `/var/lib/dkms/broadcom-sta/6.30.223.271/source` → `/usr/src/broadcom-sta-6.30.223.271/`. Patches applied to `/usr/src/` are immediately visible through this symlink. Do NOT call `dkms add` explicitly — calling it again will fail with "module already added."
 
 ### autoinstall.yaml Key Sections
 
 **early-commands** (runs before network config, in the installer environment):
 1. Detects running kernel version dynamically (`KVER="$(uname -r)"`) — no hardcoded version
 2. Validates kernel headers exist for running kernel; exits if not found
-3. Installs kernel headers and modules from `/cdrom/macpro-pkgs/`
+3. Installs kernel headers from `/cdrom/macpro-pkgs/`
 4. Installs build toolchain (gcc, make, binutils, libc-dev, etc.)
-5. Installs `broadcom-sta-dkms` and `dkms`
-6. Compiles `wl.ko` via DKMS against the detected kernel
-7. Loads driver with `modprobe wl`; exits if module fails to load (WiFi is critical)
-8. Waits for WiFi interface to appear (up to 30 seconds, checks `wl[pw]*` and `wlan*` patterns)
-9. Starts SSH server — tries `apt-get install openssh-server` first, falls back to ISO pool `.deb`s
+5. Installs `broadcom-sta-dkms` and `dkms` (dpkg postinst auto-runs `dkms add`, creating a symlink)
+6. Applies 6 DKMS patches from `/cdrom/macpro-pkgs/dkms-patches/` for kernel 6.8+ compatibility (patches modify `/usr/src/`, visible through the DKMS symlink)
+7. Compiles `wl.ko` via DKMS against the detected kernel (`dkms build` + `dkms install`)
+8. Loads driver with `modprobe wl`; exits if module fails to load (WiFi is critical)
+9. Waits for WiFi interface to appear (up to 30 seconds, checks `wl[pw]*` and `wlan*` patterns)
+10. Starts SSH server — tries `apt-get install openssh-server` first, falls back to ISO pool `.deb`s with `--force-depends`
 
-Each step sends a progress webhook with `{progress, stage, status, message}` to the monitoring server.
+Each step sends a progress webhook with `{progress, stage, status, message}` to the monitoring server. All critical failures call `exit 1` to abort installation.
 
 **network**: Uses `wl0` interface with `match: driver: wl`, connects to configured WiFi
 
 **late-commands** (runs after install, installs into target system):
 1. Detects running kernel version dynamically (`KVER="$(uname -r)"`)
 2. Validates kernel headers exist for running kernel; exits if not found
-3. Installs kernel headers, build toolchain, and DKMS into `/target` in 4 dependency-ordered stages
-4. Compiles `wl.ko` via DKMS in the target chroot (ensures persistence across reboots)
-5. Writes netplan WiFi config for target system (uses `printf` to avoid heredoc indentation issues)
+3. Installs kernel headers, build toolchain, and DKMS into `/target` in 4 dependency-ordered stages (all fatal on failure)
+4. Installs `broadcom-sta-dkms` (postinst auto-runs `dkms add`), applies DKMS patches, then compiles `wl.ko` via DKMS in the target chroot with `/proc`, `/sys`, `/dev` bind-mounted (ensures persistence across reboots)
+5. Writes netplan WiFi config for target system (uses `printf` to avoid heredoc indentation issues, `networkd` renderer with `wpa_supplicant` for WiFi)
 6. Pins kernel and headers to `$KVER` via `apt-mark hold` (dynamic, not hardcoded)
 7. Configures mDNS for `macpro-linux.local` hostname resolution
 8. Saves install logs to `/var/log/macpro-install/`
@@ -283,6 +303,10 @@ dmesg | grep -i 'dkms\|wl\|broadcom'
 cat /run/macpro.log
 # Check that kernel headers match running kernel:
 ls /cdrom/macpro-pkgs/linux-headers-$(uname -r)_*.deb
+# Check DKMS patch application:
+cat /var/log/macpro-install/macpro.log | grep -i patch
+# Verify DKMS symlink exists:
+ls -la /var/lib/dkms/broadcom-sta/6.30.223.271/source
 ```
 
 ### WiFi doesn't connect
@@ -299,8 +323,9 @@ ssh teja@macpro-linux.local
 ```
 
 ### Kernel updates break WiFi
-Kernel is pinned to the ISO's kernel version via `apt-mark hold`. If you must update, recompile the driver:
+Kernel is pinned to the ISO's kernel version via `apt-mark hold`. If you must update, you'll need to recompile the driver with the DKMS patches applied:
 ```bash
-sudo dkms remove broadcom-sta/6.30.223.271 -k <new-kernel>
+# Apply patches to /usr/src/broadcom-sta-6.30.223.271/ first, then:
+sudo dkms build broadcom-sta/6.30.223.271 -k <new-kernel>
 sudo dkms install broadcom-sta/6.30.223.271 -k <new-kernel>
 ```
