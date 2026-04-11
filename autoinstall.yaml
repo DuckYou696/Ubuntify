@@ -264,9 +264,27 @@ autoinstall:
         echo "[early] Network connectivity verified" >> "$LOG"
         curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":28,"stage":"prep-netcheck","status":"verified","message":"WiFi connectivity confirmed — safe to proceed with storage"}' > /dev/null 2>&1 || true
       else
-        echo "[early] FATAL: WiFi connectivity test failed after 60s — cannot proceed with storage wipe" >> "$LOG"
-        curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":26,"stage":"prep-netcheck","status":"failed","message":"FATAL: WiFi not connected — aborting before storage wipe"}' > /dev/null 2>&1 || true
-        exit 1
+        echo "[early] WARN: WiFi connectivity test failed — attempting reconnect..." >> "$LOG"
+        for drv in b43 ssb bcma brcmsmac wl; do rmmod $drv 2>/dev/null || true; done
+        sleep 2
+        modprobe wl 2>>"$LOG" || true
+        sleep 5
+        NET_RETRY=0
+        for i in $(seq 1 6); do
+          if curl -s -m 5 -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":28,"stage":"prep-reconnect","status":"retrying","message":"WiFi reconnect attempt"}' > /dev/null 2>&1; then
+            NET_RETRY=1
+            break
+          fi
+          sleep 10
+        done
+        if [ "$NET_RETRY" -eq 1 ]; then
+          echo "[early] Network connectivity restored after reconnect" >> "$LOG"
+          curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":28,"stage":"prep-reconnect","status":"recovered","message":"WiFi recovered after driver reload"}' > /dev/null 2>&1 || true
+        else
+          echo "[early] FATAL: WiFi connectivity test failed after reconnect attempt — cannot proceed with storage wipe" >> "$LOG"
+          curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":28,"stage":"prep-netcheck","status":"failed","message":"FATAL: WiFi not connected even after reconnect"}' > /dev/null 2>&1 || true
+          exit 1
+        fi
       fi
       set +x
 
@@ -348,6 +366,33 @@ autoinstall:
     - |
       KVER="$(uname -r)"
       ABI_VER="${KVER%-generic}"
+      LOG="/run/macpro.log"
+      WHURL="http://192.168.1.115:8080/webhook"
+      echo "[late] Late commands starting..." >> "$LOG"
+      curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":29,"stage":"late-init","status":"running","message":"Late commands started — verifying WiFi health"}' > /dev/null 2>&1 || true
+      WIFI_IFACE_LATE=$(ip link show 2>/dev/null | grep -oE 'wl[pw][^:]+' | head -1 || ip link show 2>/dev/null | grep -oE 'wl[0-9]+' | head -1 || true)
+      if [ -n "$WIFI_IFACE_LATE" ]; then
+        if ! ip addr show "$WIFI_IFACE_LATE" 2>/dev/null | grep -q "inet "; then
+          echo "[late] WARN: WiFi lost IP during storage — attempting reconnect..." >> "$LOG"
+          for drv in b43 ssb bcma brcmsmac wl; do rmmod $drv 2>/dev/null || true; done
+          sleep 2
+          modprobe wl 2>>"$LOG" || true
+          for _i in $(seq 1 12); do
+            WIFI_IFACE_LATE=$(ip link show 2>/dev/null | grep -oE 'wl[pw][^:]+' | head -1 || ip link show 2>/dev/null | grep -oE 'wl[0-9]+' | head -1 || true)
+            if [ -n "$WIFI_IFACE_LATE" ] && ip addr show "$WIFI_IFACE_LATE" 2>/dev/null | grep -q "inet "; then
+              echo "[late] WiFi reconnected on $WIFI_IFACE_LATE" >> "$LOG"
+              break
+            fi
+            sleep 5
+          done
+          if [ -n "$WIFI_IFACE_LATE" ] && ! ip addr show "$WIFI_IFACE_LATE" 2>/dev/null | grep -q "inet "; then
+            echo "[late] FATAL: WiFi reconnect failed — no network for late-commands" >> "$LOG"
+            curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":29,"stage":"late-reconnect","status":"failed","message":"FATAL: WiFi lost and cannot reconnect"}' > /dev/null 2>&1 || true
+            if [ -f /usr/sbin/sshd ]; then /usr/sbin/sshd -D -e &; fi
+            while true; do sleep 60; done
+          fi
+        fi
+      fi
       # Discover macpro-pkgs mount point
       PKGS=""
       for _mp in /cdrom /isodevice /mnt /target/cdrom; do
@@ -478,11 +523,17 @@ autoinstall:
       mkdir -p /target/etc/netplan
       printf 'network:\n  version: 2\n  renderer: networkd\n  wifis:\n    wl0:\n      match:\n        driver: wl\n      dhcp4: true\n      optional: true\n      access-points:\n        "ATTj6pXatS":\n          password: "j75b39=z?mpg"\n' > /target/etc/netplan/01-wifi.yaml
       chmod 600 /target/etc/netplan/01-wifi.yaml
-      # Validate netplan config before proceeding
       if command -v netplan 2>/dev/null >/dev/null; then
         if ! netplan generate 2>>/run/macpro.log; then
-          echo "[late] FATAL: netplan generate failed — invalid WiFi config" >> /run/macpro.log
-          exit 1
+          echo "[late] WARN: netplan generate failed, regenerating from known-good template..." >> /run/macpro.log
+          rm -f /target/etc/netplan/01-wifi.yaml
+          printf 'network:\n  version: 2\n  renderer: networkd\n  wifis:\n    wl0:\n      match:\n        driver: wl\n      dhcp4: true\n      optional: true\n      access-points:\n        "ATTj6pXatS":\n          password: "j75b39=z?mpg"\n' > /target/etc/netplan/01-wifi.yaml
+          chmod 600 /target/etc/netplan/01-wifi.yaml
+          if ! netplan generate 2>>/run/macpro.log; then
+            echo "[late] FATAL: netplan generate failed even after regeneration" >> /run/macpro.log
+            exit 1
+          fi
+          echo "[late] Netplan regenerated successfully from fallback template" >> /run/macpro.log
         fi
       fi
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":73,"stage":"late-netplan","status":"configured","message":"WiFi netplan config written"}' > /dev/null 2>&1 || true
