@@ -86,10 +86,8 @@ autoinstall:
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":13,"stage":"prep-dkms","status":"installing","message":"Installing DKMS and Broadcom driver source"}' > /dev/null 2>&1 || true
       echo "[early] Installing DKMS and Broadcom driver source..." >> "$LOG"
       dpkg -i $PKGS/dkms_*.deb $PKGS/broadcom-sta-dkms_*.deb 2>>"$LOG" || { echo "[early] ERROR: dkms/broadcom install failed" >> "$LOG"; }
-
-      curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":15,"stage":"prep-build","status":"building","message":"Compiling wl driver via DKMS"}' > /dev/null 2>&1 || true
-      echo "[early] Building wl driver via DKMS..." >> "$LOG"
-      dkms add broadcom-sta/6.30.223.271 2>>"$LOG" || { echo "[early] FATAL: dkms add failed" >> "$LOG"; curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":15,"stage":"prep-dkms","status":"failed","message":"FATAL: dkms add failed"}' > /dev/null 2>&1 || true; exit 1; }
+      # dkms add is handled by dpkg postinst (creates symlink /var/lib/dkms/.../source -> /usr/src/...)
+      # Patches modify /usr/src/... which is visible through the symlink for dkms build
       # Apply DKMS patches for kernel 6.8+ compatibility from ISO
       if [ -d /cdrom/macpro-pkgs/dkms-patches ]; then
         echo "[early] Applying DKMS compatibility patches..." >> "$LOG"
@@ -98,7 +96,7 @@ autoinstall:
             echo "[early] Applying $patch..." >> "$LOG"
             if ! patch -p1 -d /usr/src/broadcom-sta-6.30.223.271 < "/cdrom/macpro-pkgs/dkms-patches/$patch" >> "$LOG" 2>&1; then
               echo "[early] FATAL: Patch $patch failed to apply" >> "$LOG"
-              curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "{\"progress\":15,\"stage\":\"prep-patch\",\"status\":\"failed\",\"message\":\"FATAL: DKMS patch $patch failed\"}" > /dev/null 2>&1 || true
+              curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "{\"progress\":14,\"stage\":\"prep-patch\",\"status\":\"failed\",\"message\":\"FATAL: DKMS patch $patch failed\"}" > /dev/null 2>&1 || true
               exit 1
             fi
           else
@@ -108,6 +106,9 @@ autoinstall:
       else
         echo "[early] WARN: No DKMS patches directory found" >> "$LOG"
       fi
+
+      curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":15,"stage":"prep-build","status":"building","message":"Compiling wl driver via DKMS"}' > /dev/null 2>&1 || true
+      echo "[early] Building wl driver via DKMS..." >> "$LOG"
       dkms build broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG" || { echo "[early] FATAL: dkms build failed" >> "$LOG"; curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":15,"stage":"prep-build","status":"failed","message":"FATAL: dkms build failed"}' > /dev/null 2>&1 || true; exit 1; }
       dkms install broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG" || { echo "[early] FATAL: dkms install failed" >> "$LOG"; curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":15,"stage":"prep-build","status":"failed","message":"FATAL: dkms install failed"}' > /dev/null 2>&1 || true; exit 1; }
 
@@ -269,12 +270,8 @@ autoinstall:
       # Stage 4: DKMS and driver (depend on stage 3)
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":60,"stage":"late-dkms","status":"building","message":"Stage 4/4: Installing DKMS and compiling WiFi driver for target"}' > /dev/null 2>&1 || true
       dpkg --root /target -i $PKGS/dkms_*.deb $PKGS/broadcom-sta-dkms_*.deb 2>>"$LOG" || { echo "[late] FATAL: Stage 4 (dkms/broadcom dpkg) failed" >> "$LOG"; curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":60,"stage":"late-dkms","status":"failed","message":"FATAL: DKMS package install failed"}' > /dev/null 2>&1 || true; exit 1; }
-      # Bind-mount /proc, /sys, /dev for chroot DKMS compilation
-      mount --bind /proc /target/proc 2>>"$LOG" || { echo "[late] FATAL: mount /proc failed" >> "$LOG"; exit 1; }
-      mount --bind /sys /target/sys 2>>"$LOG" || { echo "[late] FATAL: mount /sys failed" >> "$LOG"; umount /target/proc 2>/dev/null || true; exit 1; }
-      mount --bind /dev /target/dev 2>>"$LOG" || { echo "[late] FATAL: mount /dev failed" >> "$LOG"; umount /target/sys 2>/dev/null || true; umount /target/proc 2>/dev/null || true; exit 1; }
-      chroot /target dkms add broadcom-sta/6.30.223.271 2>>"$LOG" || { echo "[late] FATAL: dkms add failed" >> "$LOG"; curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":62,"stage":"late-dkms","status":"failed","message":"FATAL: dkms add failed in target"}' > /dev/null 2>&1 || true; umount /target/dev /target/sys /target/proc 2>/dev/null || true; exit 1; }
-      # Apply DKMS patches for kernel 6.8+ compatibility
+      # dkms add is handled by dpkg postinst (creates symlink in /var/lib/dkms/)
+      # Apply DKMS patches for kernel 6.8+ compatibility (before dkms build, after dkms add)
       if [ -d /cdrom/macpro-pkgs/dkms-patches ]; then
         echo "[late] Applying DKMS compatibility patches in target..." >> "$LOG"
         for patch in $(cat /cdrom/macpro-pkgs/dkms-patches/series); do
@@ -282,8 +279,7 @@ autoinstall:
             echo "[late] Applying $patch..." >> "$LOG"
             if ! chroot /target patch -p1 -d /usr/src/broadcom-sta-6.30.223.271 < "/cdrom/macpro-pkgs/dkms-patches/$patch" >> "$LOG" 2>&1; then
               echo "[late] FATAL: Patch $patch failed to apply in target" >> "$LOG"
-              curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "{\"progress\":62,\"stage\":\"late-patch\",\"status\":\"failed\",\"message\":\"FATAL: DKMS patch $patch failed in target\"}" > /dev/null 2>&1 || true
-              umount /target/dev /target/sys /target/proc 2>/dev/null || true
+              curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "{\"progress\":61,\"stage\":\"late-patch\",\"status\":\"failed\",\"message\":\"FATAL: DKMS patch $patch failed in target\"}" > /dev/null 2>&1 || true
               exit 1
             fi
           else
@@ -291,6 +287,11 @@ autoinstall:
           fi
         done
       fi
+      # Bind-mount /proc, /sys, /dev for chroot DKMS compilation
+      mount --bind /proc /target/proc 2>>"$LOG" || { echo "[late] FATAL: mount /proc failed" >> "$LOG"; exit 1; }
+      mount --bind /sys /target/sys 2>>"$LOG" || { echo "[late] FATAL: mount /sys failed" >> "$LOG"; umount /target/proc 2>/dev/null || true; exit 1; }
+      mount --bind /dev /target/dev 2>>"$LOG" || { echo "[late] FATAL: mount /dev failed" >> "$LOG"; umount /target/sys 2>/dev/null || true; umount /target/proc 2>/dev/null || true; exit 1; }
+      # dkms add handled by dpkg postinst; patches applied above before bind mounts
       chroot /target dkms build broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG" || { echo "[late] FATAL: dkms build failed" >> "$LOG"; curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":63,"stage":"late-dkms","status":"failed","message":"FATAL: dkms build failed in target"}' > /dev/null 2>&1 || true; umount /target/dev /target/sys /target/proc 2>/dev/null || true; exit 1; }
       chroot /target dkms install broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG" || { echo "[late] FATAL: dkms install failed" >> "$LOG"; curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":64,"stage":"late-dkms","status":"failed","message":"FATAL: dkms install failed in target"}' > /dev/null 2>&1 || true; umount /target/dev /target/sys /target/proc 2>/dev/null || true; exit 1; }
       umount /target/dev /target/sys /target/proc 2>/dev/null || true
