@@ -66,9 +66,9 @@ cd macpro-monitor && ./start.sh    # Start (port 8080)
 
 3. **GPU**: AMD FirePro uses built-in `amdgpu` driver. Only `nomodeset amdgpu.si.modeset=0` kernel params needed — pre-baked in GRUB config, not entered manually.
 
-4. **Network matching**: Uses `wl0` interface ID with `match: driver: wl` in netplan. The late-commands generates netplan config using `printf` (not heredoc — indentation inside `|` blocks adds unwanted spaces). Uses `networkd` renderer (NOT NetworkManager) — networkd + wpa_supplicant works for WiFi on Ubuntu Server. WiFi interface detection uses a 60-second timeout and matches `wlp*`, `wl*`, `wlan*`, `enp*`, `eno*` patterns.
+4. **Network matching**: Uses `wl0` interface ID with `match: driver: wl` in netplan. The late-commands generates netplan config using `printf` (not heredoc — indentation inside `|` blocks adds unwanted spaces). Uses `networkd` renderer (NOT NetworkManager) — networkd + wpa_supplicant works for WiFi on Ubuntu Server. WiFi interface detection uses a 60-second timeout and matches `wlp*`, `wl*`, `wlan*`, `wl[0-9]*` patterns (Ethernet patterns removed — Mac Pro has no Ethernet port). WiFi power management is disabled via `options wl` modprobe and `wl-poweroff.service` systemd unit. Netplan generation failure is FATAL (not just WARN).
 
-5. **Storage (Dual-Boot)**: Mac Pro 2013 uses Apple PCIe SSDs via AHCI (not NVMe), so internal disk is `/dev/sda`. The deployment preserves macOS by using `preserve: true` on the disk and ALL existing partitions in the autoinstall storage config. The `prepare-headless-deploy.sh` script dynamically generates the `cidata/user-data` file after the APFS resize, using Python to read the GPT partition table (via `sgdisk`) and inject `preserve: true` entries for every existing partition (APFS container, macOS EFI, installer ESP). Partition type GUIDs are normalized to lowercase for curtin compatibility. New Ubuntu partitions (EFI 512M, /boot 1G, / rest) are created in the free space ONLY. The storage config uses string-based regex replacement (NOT `yaml.dump`) to preserve `|` block scalars in the YAML — `yaml.dump` converts block scalars to quoted strings with `\n` escapes which breaks subiquity.
+5. **Storage (Dual-Boot)**: Mac Pro 2013 uses Apple PCIe SSDs via AHCI (not NVMe), so internal disk is `/dev/sda`. The deployment preserves macOS by using `preserve: true` on the disk and ALL existing partitions in the autoinstall storage config. The `prepare-headless-deploy.sh` script dynamically generates the `cidata/user-data` file after the APFS resize, using Python to read the GPT partition table (via `sgdisk`) and inject `preserve: true` entries for every existing partition (APFS container, macOS EFI, installer ESP). Partition sizes are calculated from sgdisk first/last sector fields (NOT `blockdev` — unavailable on macOS). Partition type GUIDs are normalized to lowercase for curtin compatibility. The ESP is labeled `cidata` (NOT `UBUNTU_ESP`) to enable reliable NoCloud datasource discovery. New Ubuntu partitions (EFI 512M, /boot 1G, / rest) are created in the free space ONLY. The storage config uses string-based regex replacement (NOT `yaml.dump`) to preserve `|` block scalars in the YAML — `yaml.dump` converts block scalars to quoted strings with `\n` escapes which breaks subiquity.
 
 6. **Remote boot via `bless`**: For zero-physical-access deployment, use `bless --setBoot --mount <esp> --nextonly` from macOS SSH. The `--nextonly` flag ensures the boot device reverts to macOS if the installer fails. GRUB parameters are pre-baked in `EFI/boot/grub.cfg` — no manual keyboard input needed.
 
@@ -95,6 +95,13 @@ cd macpro-monitor && ./start.sh    # Start (port 8080)
 17. **Error diagnostics and persistence**: Error-commands save `dmesg`, `journalctl`, DKMS status, `lsmod`, and `lspci` output to `/var/log/macpro-install/` which persists across reboots (not `/tmp/`). If `/target` exists, logs are also copied there.
 
 18. **Firewall**: UFW is installed and enabled on the target system before reboot, denying all incoming connections except SSH. This protects the machine on the local network since the WiFi credentials are in the git repository.
+19. **Dynamic mount discovery**: The `macpro-pkgs/` directory is discovered dynamically at install time by searching `/cdrom`, `/isodevice`, and `/mnt` — the path varies depending on boot method (USB vs internal ESP).
+20. **DKMS patch pre-validation**: Before applying DKMS patches, each patch file is validated for existence and readability. Missing patches are FATAL (not just WARN) because they are required for kernel 6.8+ compatibility.
+21. **WiFi connectivity verification**: After driver load and interface detection, the installer verifies WiFi by scanning for networks (iwlist), checking DHCP lease, and testing HTTP connectivity. All three checks must pass before installation proceeds.
+22. **Apple EFI 1.1 bug workaround**: Mac Pro 2013 firmware has an EFI 1.1 implementation that causes `efibootmgr` to fail with `LIBEFIVAR_OPS=efivarfs` set. This environment variable is exported before `efibootmgr` calls in late-commands (Ubuntu Bug #2040190).
+23. **Late-commands recovery mode**: If post-install verification finds WiFi is broken in the target system (missing netplan config or WiFi driver module), the installer does NOT reboot into a headless brick. Instead, it keeps SSH alive and enters an infinite sleep loop, allowing remote SSH debugging.
+24. **WiFi power management**: The `wl` module is loaded with power management disabled via modprobe options (`options wl`) and a systemd unit (`wl-poweroff.service`) that runs `iwconfig <iface> power off` on boot. This prevents WiFi disconnections from power saving.
+25. **Self-healing DKMS**: If the initial DKMS build fails, the system automatically attempts a clean rebuild: removes the broken build directory, reapplies patches, and retries. If the retry also fails, it exits with FATAL.
 
 ## Boot Methods
 
@@ -109,7 +116,7 @@ cd macpro-monitor && ./start.sh    # Start (port 8080)
 
 | Direction | Method | Command |
 |-----------|--------|---------|
-| macOS → Ubuntu | `bless` | `bless --setBoot --mount /Volumes/ESP --nextonly` then reboot |
+| macOS → Ubuntu | `bless` | `bless --setBoot --mount /Volumes/ESP --nextonly` then reboot (NOTE: `--nextonly` only reverts if firmware can't find bootloader, NOT on kernel panic) |
 | Ubuntu → macOS | `efibootmgr` | `sudo boot-macos` then reboot |
 | Ubuntu → macOS | GRUB menu | Select "Reboot to Apple Boot Manager" at GRUB boot |
 | Any → macOS | Firmware | Hold Option at boot (requires physical access) |
