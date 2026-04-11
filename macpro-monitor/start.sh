@@ -14,9 +14,15 @@ fi
 # Use 'disown' so the process doesn't die when you close the terminal
 nohup node server.js > server.log 2>&1 &
 echo $! > server.pid
-disown 
+disown
 
 sleep 2
-echo "Server started (PID: $(cat server.pid))"
-echo "http://${HOSTNAME}:8080"
-open "http://localhost:8080"
+if [ -f server.pid ] && kill -0 "$(cat server.pid)" 2>/dev/null; then
+    echo "Server started (PID: $(cat server.pid))"
+    echo "http://localhost:${PORT:-8080}"
+    open "http://localhost:${PORT:-8080}"
+else
+    echo "ERROR: Server failed to start. Check server.log:"
+    cat server.log 2>/dev/null
+    exit 1
+fi
