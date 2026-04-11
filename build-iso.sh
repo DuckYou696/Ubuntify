@@ -40,6 +40,7 @@ echo "[3/5] Overlaying custom files..."
 
 cp "$AUTOINSTALL" "$STAGING/iso_root/autoinstall.yaml"
 
+mkdir -p "$STAGING/iso_root/cidata"
 cp "$AUTOINSTALL" "$STAGING/iso_root/cidata/user-data"
 echo "instance-id: macpro-linux-i1" > "$STAGING/iso_root/cidata/meta-data"
 touch "$STAGING/iso_root/cidata/vendor-data"

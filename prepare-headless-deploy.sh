@@ -189,12 +189,32 @@ cp "$ISO_MOUNT/autoinstall.yaml" "$ESP_MOUNT/autoinstall.yaml" 2>/dev/null || \
 
 log "Copying driver compilation packages..."
 mkdir -p "$ESP_MOUNT/macpro-pkgs"
-cp "$ISO_MOUNT/macpro-pkgs/"* "$ESP_MOUNT/macpro-pkgs/" 2>/dev/null || \
+cp "$ISO_MOUNT/macpro-pkgs/"*.deb "$ESP_MOUNT/macpro-pkgs/" 2>/dev/null || \
     cp "$SCRIPT_DIR/packages/"*.deb "$ESP_MOUNT/macpro-pkgs/" 2>/dev/null || \
     warn "Some driver packages may be missing"
 # Verify at least the critical driver package exists
 if ! ls "$ESP_MOUNT/macpro-pkgs/"broadcom-sta-dkms_*.deb 1>/dev/null 2>&1; then
     warn "broadcom-sta-dkms .deb not found in macpro-pkgs/ — WiFi driver compilation will fail"
+fi
+# Copy DKMS patches (CRITICAL: subdirectory not matched by *.deb glob above)
+if [ -d "$ISO_MOUNT/macpro-pkgs/dkms-patches" ]; then
+    mkdir -p "$ESP_MOUNT/macpro-pkgs/dkms-patches"
+    cp "$ISO_MOUNT/macpro-pkgs/dkms-patches/"* "$ESP_MOUNT/macpro-pkgs/dkms-patches/" 2>/dev/null || \
+        warn "Some DKMS patches may be missing"
+elif [ -d "$SCRIPT_DIR/packages/dkms-patches" ]; then
+    mkdir -p "$ESP_MOUNT/macpro-pkgs/dkms-patches"
+    cp "$SCRIPT_DIR/packages/dkms-patches/"* "$ESP_MOUNT/macpro-pkgs/dkms-patches/" 2>/dev/null || \
+        warn "Some DKMS patches may be missing"
+else
+    warn "No DKMS patches found — broadcom-sta will fail to compile on kernel 6.8+"
+fi
+# Verify critical patch files exist
+if [ -d "$ESP_MOUNT/macpro-pkgs/dkms-patches" ]; then
+    if [ ! -f "$ESP_MOUNT/macpro-pkgs/dkms-patches/series" ]; then
+        warn "dkms-patches/series file missing — patches will not be applied in order"
+    fi
+    PATCH_COUNT=$(ls "$ESP_MOUNT/macpro-pkgs/dkms-patches/"*.patch 2>/dev/null | wc -l | tr -d ' ')
+    log "DKMS patches copied: $PATCH_COUNT patches for kernel 6.8+ compatibility"
 fi
 
 # Copy cidata for ds=nocloud
@@ -273,6 +293,14 @@ if ls "$ESP_MOUNT/macpro-pkgs/"broadcom-sta-dkms_*.deb 1>/dev/null 2>&1; then
     log "  ✓ macpro-pkgs/broadcom-sta-dkms_*.deb"
 else
     warn "  ✗ macpro-pkgs/broadcom-sta-dkms (not found)"
+    ALL_OK=false
+fi
+
+if [ -f "$ESP_MOUNT/macpro-pkgs/dkms-patches/series" ]; then
+    PATCH_COUNT=$(ls "$ESP_MOUNT/macpro-pkgs/dkms-patches/"*.patch 2>/dev/null | wc -l | tr -d ' ')
+    log "  ✓ macpro-pkgs/dkms-patches/ ($PATCH_COUNT patches)"
+else
+    warn "  ✗ macpro-pkgs/dkms-patches/ (missing — driver will fail on kernel 6.8+)"
     ALL_OK=false
 fi
 

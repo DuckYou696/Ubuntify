@@ -66,6 +66,12 @@ autoinstall:
         curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":2,"stage":"prep-init","status":"failed","message":"FATAL: No kernel headers for running kernel"}' > /dev/null 2>&1 || true
         exit 1
       fi
+      # Validate DKMS patches exist — driver WILL NOT compile on kernel 6.8+ without them
+      if [ ! -d /cdrom/macpro-pkgs/dkms-patches ] || [ ! -f /cdrom/macpro-pkgs/dkms-patches/series ]; then
+        echo "[early] FATAL: DKMS patches missing — broadcom-sta cannot compile on kernel 6.8+" >> "$LOG"
+        curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":2,"stage":"prep-init","status":"failed","message":"FATAL: DKMS patches missing — driver compilation will fail"}' > /dev/null 2>&1 || true
+        exit 1
+      fi
 
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":5,"stage":"prep-headers","status":"installing","message":"Installing kernel headers"}' > /dev/null 2>&1 || true
       echo "[early] Installing kernel headers..." >> "$LOG"
@@ -118,8 +124,25 @@ autoinstall:
 
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":15,"stage":"prep-build","status":"building","message":"Compiling wl driver via DKMS"}' > /dev/null 2>&1 || true
       echo "[early] Building wl driver via DKMS..." >> "$LOG"
-      dkms build broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG" || { echo "[early] FATAL: dkms build failed" >> "$LOG"; curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":15,"stage":"prep-build","status":"failed","message":"FATAL: dkms build failed"}' > /dev/null 2>&1 || true; exit 1; }
-      dkms install broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG" || { echo "[early] FATAL: dkms install failed" >> "$LOG"; curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":15,"stage":"prep-build","status":"failed","message":"FATAL: dkms install failed"}' > /dev/null 2>&1 || true; exit 1; }
+      if ! dkms build broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG"; then
+        echo "[early] WARN: dkms build failed, retrying after clean..." >> "$LOG"
+        dkms remove broadcom-sta/6.30.223.271 -k "$KVER" 2>/dev/null || true
+        sleep 2
+        if ! dkms build broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG"; then
+          echo "[early] FATAL: dkms build failed on retry" >> "$LOG"
+          curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":15,"stage":"prep-build","status":"failed","message":"FATAL: dkms build failed"}' > /dev/null 2>&1 || true
+          exit 1
+        fi
+      fi
+      if ! dkms install broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG"; then
+        echo "[early] WARN: dkms install failed, retrying..." >> "$LOG"
+        sleep 2
+        if ! dkms install broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG"; then
+          echo "[early] FATAL: dkms install failed on retry" >> "$LOG"
+          curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":15,"stage":"prep-build","status":"failed","message":"FATAL: dkms install failed"}' > /dev/null 2>&1 || true
+          exit 1
+        fi
+      fi
 
       for drv in b43 ssb bcma brcmsmac; do
           echo "blacklist $drv" >> /etc/modprobe.d/blacklist-bcm.conf
@@ -177,6 +200,7 @@ autoinstall:
 
   network:
     version: 2
+    renderer: networkd
     wifis:
       wl0:
         match:
@@ -248,6 +272,12 @@ autoinstall:
         curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":30,"stage":"late-init","status":"failed","message":"FATAL: No kernel headers for running kernel"}' > /dev/null 2>&1 || true
         exit 1
       fi
+      # Validate DKMS patches exist — driver WILL NOT compile on kernel 6.8+ without them
+      if [ ! -d /cdrom/macpro-pkgs/dkms-patches ] || [ ! -f /cdrom/macpro-pkgs/dkms-patches/series ]; then
+        echo "[late] FATAL: DKMS patches missing — broadcom-sta cannot compile on kernel 6.8+" >> "$LOG"
+        curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":30,"stage":"late-init","status":"failed","message":"FATAL: DKMS patches missing in late-commands"}' > /dev/null 2>&1 || true
+        exit 1
+      fi
       # Stage 1: Kernel headers (no deps)
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":35,"stage":"late-headers","status":"installing","message":"Stage 1/4: Installing kernel headers into target"}' > /dev/null 2>&1 || true
       dpkg --root /target -i \
@@ -303,8 +333,25 @@ autoinstall:
       mount --bind /sys /target/sys 2>>"$LOG" || { echo "[late] FATAL: mount /sys failed" >> "$LOG"; umount /target/proc 2>/dev/null || true; exit 1; }
       mount --bind /dev /target/dev 2>>"$LOG" || { echo "[late] FATAL: mount /dev failed" >> "$LOG"; umount /target/sys /target/proc 2>/dev/null || true; exit 1; }
       # dkms add handled by dpkg postinst; patches applied above before bind mounts
-      chroot /target dkms build broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG" || { echo "[late] FATAL: dkms build failed" >> "$LOG"; curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":63,"stage":"late-dkms","status":"failed","message":"FATAL: dkms build failed in target"}' > /dev/null 2>&1 || true; exit 1; }
-      chroot /target dkms install broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG" || { echo "[late] FATAL: dkms install failed" >> "$LOG"; curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":64,"stage":"late-dkms","status":"failed","message":"FATAL: dkms install failed in target"}' > /dev/null 2>&1 || true; exit 1; }
+      if ! chroot /target dkms build broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG"; then
+        echo "[late] WARN: dkms build failed in target, retrying after clean..." >> "$LOG"
+        chroot /target dkms remove broadcom-sta/6.30.223.271 -k "$KVER" 2>/dev/null || true
+        sleep 2
+        if ! chroot /target dkms build broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG"; then
+          echo "[late] FATAL: dkms build failed in target on retry" >> "$LOG"
+          curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":63,"stage":"late-dkms","status":"failed","message":"FATAL: dkms build failed in target"}' > /dev/null 2>&1 || true
+          exit 1
+        fi
+      fi
+      if ! chroot /target dkms install broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG"; then
+        echo "[late] WARN: dkms install failed in target, retrying..." >> "$LOG"
+        sleep 2
+        if ! chroot /target dkms install broadcom-sta/6.30.223.271 -k "$KVER" 2>>"$LOG"; then
+          echo "[late] FATAL: dkms install failed in target on retry" >> "$LOG"
+          curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":64,"stage":"late-dkms","status":"failed","message":"FATAL: dkms install failed in target"}' > /dev/null 2>&1 || true
+          exit 1
+        fi
+      fi
       umount /target/dev /target/sys /target/proc 2>/dev/null || true
       echo "wl" >> /target/etc/modules
       echo "[late] WiFi driver installed into target" >> "$LOG"
@@ -315,7 +362,7 @@ autoinstall:
       # Remove autoinstall-generated netplan to avoid conflict, write match-based version
       rm -f /target/etc/netplan/50-cloud-init.yaml 2>/dev/null || true
       mkdir -p /target/etc/netplan
-      printf 'network:\n  version: 2\n  wifis:\n    wl0:\n      match:\n        driver: wl\n      dhcp4: true\n      optional: true\n      access-points:\n        "ATTj6pXatS":\n          password: "j75b39=z?mpg"\n' > /target/etc/netplan/01-wifi.yaml
+      printf 'network:\n  version: 2\n  renderer: networkd\n  wifis:\n    wl0:\n      match:\n        driver: wl\n      dhcp4: true\n      optional: true\n      access-points:\n        "ATTj6pXatS":\n          password: "j75b39=z?mpg"\n' > /target/etc/netplan/01-wifi.yaml
       chmod 600 /target/etc/netplan/01-wifi.yaml
       # Validate netplan config before proceeding
       if command -v netplan 2>/dev/null >/dev/null; then
@@ -360,13 +407,11 @@ autoinstall:
   error-commands:
     - |
       WHURL="http://192.168.1.115:8080/webhook"
-      # Attempt WiFi recovery for error reporting
       modprobe wl 2>/dev/null || true
       sleep 3
       WIFI_DEV=$(ip link show 2>/dev/null | grep -oE 'wl[pw][^:]+' | head -1)
       if [ -n "$WIFI_DEV" ]; then
         ip link set "$WIFI_DEV" up 2>/dev/null || true
-        echo "[error] WiFi interface detected: $WIFI_DEV" >> /tmp/error-log
       else
         WIFI_DEV=$(ip link show 2>/dev/null | grep -oE 'wlan[0-9]+' | head -1)
         [ -n "$WIFI_DEV" ] && ip link set "$WIFI_DEV" up 2>/dev/null || true
@@ -375,10 +420,18 @@ autoinstall:
       WHURL="http://192.168.1.115:8080/webhook"
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" \
         -d '{"progress":0,"stage":"error","status":"failed","message":"Installation failed — check logs on target system"}' > /dev/null 2>&1 || true
-      # Save critical diagnostic info
-      dmesg > /tmp/error-dmesg.log 2>/dev/null || true
-      journalctl -b > /tmp/error-journalctl.log 2>/dev/null || true
-      cat /run/macpro.log > /tmp/error-macpro.log 2>/dev/null || true
+      ERR_DIR="/var/log/macpro-install"
+      mkdir -p "$ERR_DIR" 2>/dev/null || true
+      dmesg > "$ERR_DIR/error-dmesg.log" 2>/dev/null || true
+      journalctl -b > "$ERR_DIR/error-journalctl.log" 2>/dev/null || true
+      cat /run/macpro.log > "$ERR_DIR/error-macpro.log" 2>/dev/null || true
+      dkms status > "$ERR_DIR/error-dkms-status.log" 2>/dev/null || true
+      lsmod > "$ERR_DIR/error-lsmod.log" 2>/dev/null || true
+      lspci -nn > "$ERR_DIR/error-lspci.log" 2>/dev/null || true
+      if [ -d /target ]; then
+        mkdir -p /target/var/log/macpro-install 2>/dev/null || true
+        cp "$ERR_DIR/"* /target/var/log/macpro-install/ 2>/dev/null || true
+      fi
 
   # NOTE: Using reboot (not poweroff) because headless deployment requires
   # remote access after installation completes. The GPU cold-boot quirk
