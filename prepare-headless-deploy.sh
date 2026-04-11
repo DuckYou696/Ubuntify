@@ -55,6 +55,35 @@ echo ""
 
 log "Running on: $(sw_vers -productName) $(sw_vers -productVersion)"
 log "ISO: $ISO_PATH"
+
+log "Preflight: Verifying ISO integrity..."
+ISO_SIZE=$(stat -f%z "$ISO_PATH" 2>/dev/null || echo "0")
+if [ "$ISO_SIZE" -lt 1000000000 ]; then
+    die "ISO appears too small ($ISO_SIZE bytes) — may be corrupted"
+fi
+
+log "Preflight: Checking SIP status..."
+SIP_STATUS=$(csrutil status 2>/dev/null | grep -o 'enabled\|disabled' | head -1 || echo "unknown")
+if [ "$SIP_STATUS" = "enabled" ]; then
+    log "SIP is enabled — bless should work (SIP does not block bless)"
+else
+    warn "SIP status: $SIP_STATUS — unexpected, verify bless will work"
+fi
+
+log "Preflight: Checking webhook endpoint reachability..."
+if curl -s -m 3 -o /dev/null "http://192.168.1.115:8080/" 2>/dev/null; then
+    log "Webhook endpoint reachable"
+else
+    warn "Webhook endpoint (192.168.1.115:8080) not reachable — monitoring will fail"
+fi
+
+log "Preflight: Checking FileVault status..."
+FV_STATUS=$(fdesetup status 2>/dev/null | grep -o 'On\|Off' | head -1 || echo "unknown")
+if [ "$FV_STATUS" = "On" ]; then
+    warn "FileVault is ON — may interfere with APFS resize"
+fi
+
+log "ISO: $ISO_PATH"
 echo ""
 
 # ── Step 1: Analyze current disk layout ──

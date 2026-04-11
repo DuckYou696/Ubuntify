@@ -41,6 +41,7 @@ autoinstall:
 
   early-commands:
     - |
+      set -x
       # Verify target disk exists and is the only internal disk
       if [ ! -e /dev/sda ]; then
         echo "[early] FATAL: /dev/sda not found — cannot proceed with storage config" >> /run/macpro.log
@@ -169,24 +170,25 @@ autoinstall:
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":20,"stage":"prep-wifi","status":"detecting","message":"Detecting WiFi interface"}' > /dev/null 2>&1 || true
       echo "[early] Detecting WiFi interface..." >> "$LOG"
       WIFI_IFACE=""
-      for i in $(seq 1 30); do
+      for i in $(seq 1 60); do
         WIFI_IFACE=$(ip link show 2>/dev/null | grep -oE 'wl[pw][^:]+' | head -1)
         [ -n "$WIFI_IFACE" ] && break
         WIFI_IFACE=$(ip link show 2>/dev/null | grep -oE 'wlan[0-9]+' | head -1)
+        [ -n "$WIFI_IFACE" ] && break
+        WIFI_IFACE=$(ip link show 2>/dev/null | grep -oE 'en[po][0-9]+s[0-9]+' | head -1)
         [ -n "$WIFI_IFACE" ] && break
         sleep 1
       done
       echo "WiFi interface: ${WIFI_IFACE:-not found}" >> "$LOG"
       if [ -z "$WIFI_IFACE" ]; then
-        echo "[early] WARNING: No WiFi interface detected — installation may fail" >> "$LOG"
-        curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":20,"stage":"prep-wifi","status":"warning","message":"WARNING: No WiFi interface detected"}' > /dev/null 2>&1 || true
-      else
-        curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "{\"progress\":22,\"stage\":\"prep-wifi\",\"status\":\"online\",\"message\":\"WiFi interface detected: ${WIFI_IFACE}\"}" > /dev/null 2>&1 || true
+        echo "[early] FATAL: No WiFi interface detected after 60s — cannot continue" >> "$LOG"
+        curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":20,"stage":"prep-wifi","status":"failed","message":"FATAL: No WiFi interface detected after 60 seconds"}' > /dev/null 2>&1 || true
+        exit 1
       fi
+      curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "{\"progress\":22,\"stage\":\"prep-wifi\",\"status\":\"online\",\"message\":\"WiFi interface detected: ${WIFI_IFACE}\"}" > /dev/null 2>&1 || true
 
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":23,"stage":"prep-ssh","status":"starting","message":"Starting SSH server for remote debugging"}' > /dev/null 2>&1 || true
       echo "[early] Starting SSH server for remote debugging..." >> "$LOG"
-      # Try installing openssh-server via apt (needs network) or from ISO pool with force-depends
       apt-get -y install openssh-server 2>>"$LOG" || dpkg --force-depends -i /cdrom/pool/restricted/o/openssh/openssh-server_*.deb /cdrom/pool/restricted/o/openssh/openssh-sftp-server_*.deb 2>>"$LOG" || true
       if [ -f /usr/sbin/sshd ]; then
         mkdir -p /run/sshd
@@ -195,7 +197,25 @@ autoinstall:
         curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":25,"stage":"prep-ssh","status":"ready","message":"SSH server ready — early-commands complete"}' > /dev/null 2>&1 || true
       else
         echo "[early] WARNING: Could not start SSH server" >> "$LOG"
-        curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":25,"stage":"prep-ssh","status":"warning","message":"SSH server could not start — but WiFi may work"}' > /dev/null 2>&1 || true
+      fi
+
+      curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":26,"stage":"prep-netcheck","status":"verifying","message":"Verifying WiFi connectivity before storage"}' > /dev/null 2>&1 || true
+      echo "[early] Verifying WiFi network connectivity..." >> "$LOG"
+      NET_OK=0
+      for i in $(seq 1 12); do
+        if curl -s -m 5 -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":26,"stage":"prep-netcheck","status":"testing","message":"Network connectivity test"}' > /dev/null 2>&1; then
+          NET_OK=1
+          break
+        fi
+        sleep 5
+      done
+      if [ "$NET_OK" -eq 1 ]; then
+        echo "[early] Network connectivity verified" >> "$LOG"
+        curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":28,"stage":"prep-netcheck","status":"verified","message":"WiFi connectivity confirmed — safe to proceed with storage"}' > /dev/null 2>&1 || true
+      else
+        echo "[early] FATAL: WiFi connectivity test failed after 60s — cannot proceed with storage wipe" >> "$LOG"
+        curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":26,"stage":"prep-netcheck","status":"failed","message":"FATAL: WiFi not connected — aborting before storage wipe"}' > /dev/null 2>&1 || true
+        exit 1
       fi
 
   network:
@@ -354,6 +374,8 @@ autoinstall:
       fi
       umount /target/dev /target/sys /target/proc 2>/dev/null || true
       echo "wl" >> /target/etc/modules
+      echo "options wl wl_msglevel=0x1" > /target/etc/modprobe.d/wl.conf
+      echo "options cfg80211 ieee80211_regdom=US" > /target/etc/modprobe.d/cfg80211.conf
       echo "[late] WiFi driver installed into target" >> "$LOG"
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":65,"stage":"late-dkms","status":"installed","message":"WiFi driver compiled and installed into target"}' > /dev/null 2>&1 || true
     - |
@@ -402,6 +424,38 @@ autoinstall:
       mkdir -p /target/var/log/macpro-install
       cp /run/macpro.log /target/var/log/macpro-install/early-commands.log || true
       dmesg > /target/var/log/macpro-install/dmesg.log || true
+      curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":97,"stage":"late-verify","status":"verifying","message":"Verifying target system before reboot"}' > /dev/null 2>&1 || true
+      echo "[late] Verifying target system integrity..." >> "$LOG"
+      VERIFY_OK=true
+      if [ ! -f /target/vmlinuz ] && [ ! -f /target/boot/vmlinuz-* ]; then
+        echo "[late] WARN: No kernel found in /target" >> "$LOG"
+        VERIFY_OK=false
+      fi
+      if [ ! -f /target/etc/netplan/01-wifi.yaml ]; then
+        echo "[late] WARN: Netplan WiFi config missing in /target" >> "$LOG"
+        VERIFY_OK=false
+      fi
+      if ! ls /target/lib/modules/*/kernel/net/wireless/ 2>/dev/null | head -1 > /dev/null 2>&1; then
+        if [ ! -d /target/lib/modules/"$(uname -r)"/updates/dkms/ ]; then
+          echo "[late] WARN: No WiFi driver module in /target kernel modules" >> "$LOG"
+        fi
+      fi
+      if [ -f /target/etc/default/grub.d/macpro.cfg ]; then
+        if ! grep -q 'nomodeset' /target/etc/default/grub.d/macpro.cfg; then
+          echo "[late] WARN: GRUB nomodeset param missing in target" >> "$LOG"
+          VERIFY_OK=false
+        fi
+      else
+        echo "[late] WARN: GRUB macpro.cfg missing in target" >> "$LOG"
+        VERIFY_OK=false
+      fi
+      if [ "$VERIFY_OK" = "false" ]; then
+        echo "[late] WARN: Some verification checks failed — installation may not boot correctly" >> "$LOG"
+        curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":97,"stage":"late-verify","status":"warning","message":"WARN: Some verification checks failed"}' > /dev/null 2>&1 || true
+      else
+        echo "[late] All verification checks passed" >> "$LOG"
+        curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":98,"stage":"late-verify","status":"verified","message":"Target system verification passed"}' > /dev/null 2>&1 || true
+      fi
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":100,"stage":"complete","status":"done","message":"Installation complete — rebooting"}' > /dev/null 2>&1 || true
 
   error-commands:
