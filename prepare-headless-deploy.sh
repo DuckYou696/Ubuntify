@@ -4,8 +4,9 @@ set -o pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 readonly ISO_PATH="${1:-${SCRIPT_DIR}/ubuntu-macpro.iso}"
-readonly ESP_NAME="UBUNTU_ESP"
+readonly ESP_NAME="cidata"
 readonly ESP_SIZE="5g"
+APFS_CONTAINER=""
 
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
@@ -17,12 +18,24 @@ warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; }
 die()   { error "$1"; exit 1; }
 
+_CLEANUP_DONE=0
+
 # ── Recovery: reset boot device to macOS on fatal error ──
 cleanup_on_error() {
+    [ "$_CLEANUP_DONE" -eq 1 ] && return
+    _CLEANUP_DONE=1
     local EXIT_CODE=$?
     if [ "$EXIT_CODE" -ne 0 ]; then
         echo ""
         error "Script exited with code $EXIT_CODE — attempting to restore macOS boot device..."
+        if [ -z "$APFS_CONTAINER" ]; then
+            # APFS_CONTAINER not yet set — try root filesystem as fallback
+            bless --mount / --setBoot 2>/dev/null && \
+                warn "macOS boot device restored via bless (root fallback — APFS container unknown)" || \
+                error "Could not restore macOS boot device — manual intervention required"
+            error "Deployment failed. macOS boot device should still be active."
+            return
+        fi
         # Re-set macOS as boot device so machine doesn't get stuck
         # on a broken ESP after a failed deploy
         # Use the APFS container volume instead of root filesystem
@@ -42,6 +55,8 @@ cleanup_on_error() {
     fi
 }
 trap cleanup_on_error EXIT
+trap 'cleanup_on_error; exit 130' SIGINT
+trap 'cleanup_on_error; exit 143' SIGTERM
 
 echo "========================================="
 echo " Mac Pro 2013 Headless Ubuntu Deploy"
@@ -196,10 +211,11 @@ log "ISO mounted at: $ISO_MOUNT"
 ESP_AVAIL=$(df -m "$ESP_MOUNT" | tail -1 | awk '{print $4}')
 ISO_TOTAL=$(du -sm "$ISO_MOUNT" 2>/dev/null | cut -f1 || echo "0")
 if [ -n "$ESP_AVAIL" ] && [ "$ESP_AVAIL" -gt 0 ] && [ -n "$ISO_TOTAL" ] && [ "$ISO_TOTAL" -gt 0 ]; then
-    if [ "$ESP_AVAIL" -lt "$ISO_TOTAL" ]; then
-        die "ESP too small: ${ESP_AVAIL}MB available, ${ISO_TOTAL}MB needed for ISO contents"
+    REQUIRED_MIN=$((ISO_TOTAL + ISO_TOTAL / 10))
+    if [ "$ESP_AVAIL" -lt "$REQUIRED_MIN" ]; then
+        die "ESP too small: ${ESP_AVAIL}MB available, ${REQUIRED_MIN}MB needed (${ISO_TOTAL}MB + 10% overhead)"
     fi
-    log "Space check: ${ESP_AVAIL}MB available, ${ISO_TOTAL}MB needed"
+    log "Space check: ${ESP_AVAIL}MB available, ${REQUIRED_MIN}MB needed (with 10% margin)"
 fi
 
 # Copy EFI boot files — CRITICAL: do not silently ignore failures
@@ -334,13 +350,16 @@ for line in part_lines:
         if disk_dev.endswith('disk0'):
             part_path = f"/dev/disk0s{part_num}"
 
-        # Get size in bytes from block device
-        try:
-            size_result = subprocess.run(['blockdev', '--getsize64', part_path],
-                                        capture_output=True, text=True)
-            size_bytes = int(size_result.stdout.strip()) if size_result.stdout.strip() else 0
-        except Exception:
-            size_bytes = 0
+        # Get size in bytes from sgdisk sector info (macOS has no blockdev)
+        # We already parsed First sector above; also parse Last sector
+        last_sector = offset_bytes // 512  # offset_bytes = first_sector * 512 from above
+        for info_line in info_text.split('\n'):
+            if 'Last sector:' in info_line:
+                sector_match = re.search(r'(\d+)', info_line.split(':')[-1])
+                if sector_match:
+                    last_sector = int(sector_match.group(1))
+                    break
+        size_bytes = (last_sector - (offset_bytes // 512) + 1) * 512
 
         if size_bytes == 0:
             continue
@@ -543,7 +562,7 @@ bless --setBoot --mount "$ESP_MOUNT" --nextonly || \
 
 log "Verifying boot device..."
 bless --info "$ESP_MOUNT" 2>/dev/null || warn "Could not verify boot device with bless --info"
-log "Boot device set via bless (--nextonly: will revert to macOS if installer fails)"
+log "Boot device set via bless (--nextonly: reverts to macOS only if firmware cannot find bootloader)"
 log "ESP: $ESP_MOUNT"
 log "Bootloader: $ESP_MOUNT/EFI/boot/BOOTX64.EFI"
 echo ""
@@ -563,8 +582,8 @@ echo "cannot find a valid bootloader, the NEXT reboot will"
 echo "fall back to macOS automatically."
 echo "HOWEVER: Once the installer successfully boots and"
 echo "begins autoinstall (which wipes the disk), macOS is"
-echo "permanently destroyed. There is no recovery without"
-echo "physical access if the installer fails mid-process."
+echo "preserved (dual-boot). However, if the installer fails mid-process,"
+echo "physical access may be required to restore boot order."
 echo ""
 echo "On next reboot, the Mac Pro will boot into"
 echo "Ubuntu Server autoinstall and begin installation."
