@@ -102,6 +102,8 @@ cd macpro-monitor && ./start.sh    # Start (port 8080)
 23. **Late-commands recovery mode**: If post-install verification finds WiFi is broken in the target system (missing netplan config or WiFi driver module), the installer does NOT reboot into a headless brick. Instead, it keeps SSH alive and enters an infinite sleep loop, allowing remote SSH debugging.
 24. **WiFi power management**: The `wl` module is loaded with power management disabled via modprobe options (`options wl`) and a systemd unit (`wl-poweroff.service`) that runs `iwconfig <iface> power off` on boot. This prevents WiFi disconnections from power saving.
 25. **Self-healing DKMS**: If the initial DKMS build fails, the system automatically attempts a clean rebuild: removes the broken build directory, reapplies patches, and retries. If the retry also fails, it exits with FATAL.
+26. **WiFi reconnect self-healing**: If WiFi connectivity is lost (early-commands curl test or late-commands IP check), the system automatically reloads the `wl` driver (rmmod conflicting modules + modprobe wl) and retries connectivity for up to 60 seconds. If reconnect also fails, the early-commands version exits with FATAL before storage begins; the late-commands version enters recovery mode (keeps SSH alive, blocks reboot).
+27. **Netplan fallback regeneration**: If `netplan generate` fails on the primary config (which includes `match: driver: wl`), the system regenerates with a simplified config (no match clause) and retries. If the simplified config also fails, exits with FATAL.
 
 ## Boot Methods
 
