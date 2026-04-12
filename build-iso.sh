@@ -108,7 +108,7 @@ cp "$STAGING/grub.cfg" "$STAGING/iso_root/boot/grub/grub.cfg"
 
 log "[4/5] Extracting boot parameters and rebuilding ISO..."
 
-BOOT_PARAMS=$(xorriso -indev "$BASE_ISO" -report_el_torito as_mkisofs 2>/dev/null)
+BOOT_PARAMS=$(xorriso -indev "$BASE_ISO" -report_el_torito as_mkisofs 2>/dev/null | tr '\n' ' ')
 
 if [ -z "$BOOT_PARAMS" ]; then
     die "Failed to extract boot parameters from base ISO"
