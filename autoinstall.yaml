@@ -119,7 +119,7 @@ autoinstall:
       # broadcom-sta-dkms postinst auto-runs 'dkms add' which may try to build
       # without patches, returning non-zero. This is expected — we apply patches
       # after dpkg and build manually. So || true here, not fatal.
-      dpkg --force-depends -i $PKGS/dkms_*.deb $PKGS/broadcom-sta-dkms_*.deb 2>>"$LOG" || log "WARN: dkms/broadcom dpkg returned non-zero (expected if postinst dkms build fails before patches)"
+      dpkg --force-depends --skip-same-version -i $PKGS/dkms_*.deb $PKGS/broadcom-sta-dkms_*.deb 2>>"$LOG" || log "WARN: dkms/broadcom dpkg returned non-zero (expected if postinst dkms build fails before patches)"
       # dkms add is handled by dpkg postinst; postinst may auto-trigger dkms build — clean before patching
       dkms remove broadcom-sta/6.30.223.271 -k "$KVER" 2>/dev/null || true
 
@@ -173,8 +173,8 @@ autoinstall:
 
       # Blacklist conflicting drivers and load wl
       for drv in b43 ssb bcma brcmsmac; do
-          echo "blacklist $drv" >> /etc/modprobe.d/blacklist-bcm.conf
-      done
+          echo "blacklist $drv"
+      done > /etc/modprobe.d/blacklist-bcm.conf
       rmmod b43 ssb bcma brcmsmac 2>/dev/null || true
       log "Loading wl module..."
       modprobe wl 2>>"$LOG" || log "ERROR: modprobe wl failed"
@@ -252,9 +252,9 @@ autoinstall:
         iwlist "$WIFI_IFACE" scan 2>/dev/null | head -20 >> "$LOG" || true
         log "WARN: WiFi not associated after 30s — check SSID/password"
       fi
-      # Check for DHCP lease
+      # Check for DHCP lease (exclude link-local 169.254.x.x which indicates DHCP failure)
       for _i in $(seq 1 6); do
-        if ip addr show "$WIFI_IFACE" 2>/dev/null | grep -q "inet "; then
+        if ip addr show "$WIFI_IFACE" 2>/dev/null | grep -q "inet " && ! ip addr show "$WIFI_IFACE" 2>/dev/null | grep -q "inet 169\.254\."; then
           break
         fi
         sleep 5
@@ -302,8 +302,6 @@ autoinstall:
     renderer: networkd
     wifis:
       wl0:
-        match:
-          driver: wl
         dhcp4: true
         optional: true
         access-points:
@@ -395,15 +393,29 @@ autoinstall:
           modprobe wl 2>>"$LOG" || true
           for _i in $(seq 1 12); do
             WIFI_IFACE_LATE=$(ip link show 2>/dev/null | grep -oE 'wl[^:]+' | head -1)
-            if [ -n "$WIFI_IFACE_LATE" ] && ip addr show "$WIFI_IFACE_LATE" 2>/dev/null | grep -q "inet "; then
+            if [ -n "$WIFI_IFACE_LATE" ] && ip addr show "$WIFI_IFACE_LATE" 2>/dev/null | grep -q "inet " && ! ip addr show "$WIFI_IFACE_LATE" 2>/dev/null | grep -q "inet 169\.254\."; then
               log "WiFi reconnected on $WIFI_IFACE_LATE"
               break
             fi
             sleep 5
           done
-          if [ -n "$WIFI_IFACE_LATE" ] && ! ip addr show "$WIFI_IFACE_LATE" 2>/dev/null | grep -q "inet "; then
-            log "FATAL: WiFi reconnect failed — no network for late-commands"
+          if [ -z "$WIFI_IFACE_LATE" ]; then
+            log "FATAL: WiFi reconnect failed — no interface found"
             wh '{"progress":29,"stage":"late-reconnect","status":"failed","message":"FATAL: WiFi lost and cannot reconnect"}'
+            if [ -f /usr/sbin/sshd ]; then
+              /usr/sbin/sshd -D -e &
+            fi
+            while true; do sleep 60; done
+          elif ! ip addr show "$WIFI_IFACE_LATE" 2>/dev/null | grep -q "inet "; then
+            log "FATAL: WiFi reconnect failed — no valid DHCP lease"
+            wh '{"progress":29,"stage":"late-reconnect","status":"failed","message":"FATAL: WiFi has no valid IP after reconnect"}'
+            if [ -f /usr/sbin/sshd ]; then
+              /usr/sbin/sshd -D -e &
+            fi
+            while true; do sleep 60; done
+          elif ip addr show "$WIFI_IFACE_LATE" 2>/dev/null | grep -q "inet 169\.254\."; then
+            log "FATAL: WiFi has only link-local address — DHCP lease failed"
+            wh '{"progress":29,"stage":"late-reconnect","status":"failed","message":"FATAL: WiFi link-local only — DHCP failed"}'
             if [ -f /usr/sbin/sshd ]; then
               /usr/sbin/sshd -D -e &
             fi
@@ -467,7 +479,7 @@ autoinstall:
       # Stage 4: DKMS and driver (depend on stage 3)
       wh '{"progress":60,"stage":"late-dkms","status":"building","message":"Stage 4/4: Installing DKMS and compiling WiFi driver for target"}'
       # broadcom-sta-dkms postinst auto-runs 'dkms add' — non-fatal, we build manually after patches
-      dpkg --root /target --force-depends -i $PKGS/dkms_*.deb $PKGS/broadcom-sta-dkms_*.deb 2>>"$LOG" || log "WARN: dkms/broadcom dpkg returned non-zero (expected if postinst dkms build fails before patches)"
+      dpkg --root /target --force-depends --skip-same-version -i $PKGS/dkms_*.deb $PKGS/broadcom-sta-dkms_*.deb 2>>"$LOG" || log "WARN: dkms/broadcom dpkg returned non-zero (expected if postinst dkms build fails before patches)"
       # dkms add handled by postinst; clean any broken auto-build before patching
       chroot /target dkms remove broadcom-sta/6.30.223.271 -k "$KVER" 2>/dev/null || true
 
@@ -523,19 +535,19 @@ autoinstall:
       umount /target/dev /target/sys /target/proc 2>/dev/null || true
 
       # Configure WiFi module and power management in target
-      echo "wl" >> /target/etc/modules
-      printf '# Disable WiFi power management to prevent disconnects\noptions wl\n' > /target/etc/modprobe.d/wl.conf
+      grep -q "^wl$" /target/etc/modules 2>/dev/null || echo "wl" >> /target/etc/modules
+      printf '# Disable WiFi power management to prevent disconnects\n' > /target/etc/modprobe.d/wl.conf
       echo "options cfg80211 ieee80211_regdom=US" > /target/etc/modprobe.d/cfg80211.conf
       # Blacklist conflicting Broadcom drivers in target system
       for drv in b43 ssb bcma brcmsmac; do
-        echo "blacklist $drv" >> /target/etc/modprobe.d/blacklist-bcm.conf
-      done
+        echo "blacklist $drv"
+      done > /target/etc/modprobe.d/blacklist-bcm.conf
       # Create helper script to disable WiFi power management (avoids systemd quoting hell)
       mkdir -p /target/usr/local/bin
       printf '#!/bin/sh\n# Disable WiFi power management to prevent disconnects\nIW=$(iwconfig 2>/dev/null | grep -oE "^wl[^[:space:]]+|^wlan[0-9]+" | head -1)\nif [ -n "$IW" ]; then\n  iwconfig "$IW" power off 2>/dev/null || true\nfi\n' > /target/usr/local/bin/wl-poweroff
       chmod +x /target/usr/local/bin/wl-poweroff
       # Create systemd service that calls the helper script
-      printf '[Unit]\nDescription=Disable WiFi power management\nAfter=network.target\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/wl-poweroff\nRemainAfterExit=yes\n\n[Install]\nWantedBy=multi-user.target\n' > /target/etc/systemd/system/wl-poweroff.service
+      printf '[Unit]\nDescription=Disable WiFi power management\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/wl-poweroff\nRemainAfterExit=yes\n\n[Install]\nWantedBy=multi-user.target\n' > /target/etc/systemd/system/wl-poweroff.service
       chroot /target systemctl enable wl-poweroff.service 2>>"$LOG" || log "WARN: wl-poweroff service enable failed"
       log "WiFi driver installed into target"
       wh '{"progress":65,"stage":"late-dkms","status":"installed","message":"WiFi driver compiled and installed into target"}'
@@ -556,7 +568,7 @@ autoinstall:
       # (produces "networkd backend does not support wifi with match:" error)
       _wifi_iface=""
       _wcnt=0
-      while [ -z "$_wifi_iface" ] && [ "$_wcnt" -lt 30 ]; do
+      while [ -z "$_wifi_iface" ] && [ "$_wcnt" -lt 60 ]; do
         _wifi_iface=$(ip link show 2>/dev/null | grep -oE 'wl[^:]+' | head -1)
         [ -n "$_wifi_iface" ] && break
         _wcnt=$((_wcnt + 1))
@@ -619,6 +631,7 @@ autoinstall:
     - |
       # sh -c block — must redefine helpers (wh/die/log)
       KVER="$(uname -r)"
+      ABI_VER="${KVER%-generic}"
       LOG="/run/macpro.log"
       WHURL="http://192.168.1.115:8080/webhook"
       wh() { curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1 || true; }
@@ -661,7 +674,7 @@ autoinstall:
       fi
       # Kernel pin preferences applied post-install (pin-priority: -1 in apt.preferences blocks curtin kernel install)
       mkdir -p /target/etc/apt/preferences.d
-      printf 'Package: linux-image-*\nPin: release o=Ubuntu\nPin-Priority: -1\n\nPackage: linux-headers-*\nPin: release o=Ubuntu\nPin-Priority: -1\n\nPackage: linux-modules-*\nPin: release o=Ubuntu\nPin-Priority: -1\n\nPackage: linux-image-6.8.0-100*\nPin: release o=Ubuntu\nPin-Priority: 1001\n\nPackage: linux-headers-6.8.0-100*\nPin: release o=Ubuntu\nPin-Priority: 1001\n\nPackage: linux-modules-6.8.0-100*\nPin: release o=Ubuntu\nPin-Priority: 1001\n' > /target/etc/apt/preferences.d/99-pin-kernel
+      printf "Package: linux-image-*\nPin: release o=Ubuntu\nPin-Priority: -1\n\nPackage: linux-headers-*\nPin: release o=Ubuntu\nPin-Priority: -1\n\nPackage: linux-modules-*\nPin: release o=Ubuntu\nPin-Priority: -1\n\nPackage: linux-image-${ABI_VER}*\nPin: release o=Ubuntu\nPin-Priority: 1001\n\nPackage: linux-headers-${ABI_VER}*\nPin: release o=Ubuntu\nPin-Priority: 1001\n\nPackage: linux-modules-${ABI_VER}*\nPin: release o=Ubuntu\nPin-Priority: 1001\n" > /target/etc/apt/preferences.d/99-pin-kernel
       wh '{"progress":87,"stage":"late-hold","status":"pinned","message":"Kernel version pinned, all auto-updates disabled, apt sources commented out"}'
 
     - |
@@ -690,7 +703,7 @@ autoinstall:
       log() { echo "[late] $1" >> "$LOG"; }
 
       wh '{"progress":90,"stage":"late-sudo","status":"configuring","message":"Configuring sudo for user teja"}'
-      echo "teja ALL=(ALL) NOPASSWD:ALL" >> /target/etc/sudoers.d/teja
+      echo "teja ALL=(ALL) NOPASSWD:ALL" > /target/etc/sudoers.d/teja
       chmod 440 /target/etc/sudoers.d/teja
 
     - |
@@ -711,7 +724,7 @@ autoinstall:
       log "Verifying target system integrity..."
       VERIFY_OK=true
       WIFI_OK=true
-      if [ ! -f /target/vmlinuz ] && [ ! -f /target/boot/vmlinuz-* ]; then
+      if ! ls /target/boot/vmlinuz-* 1>/dev/null 2>&1; then
         log "WARN: No kernel found in /target"
         VERIFY_OK=false
       fi
