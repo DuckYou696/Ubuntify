@@ -647,6 +647,8 @@ autoinstall:
       # Disable cloud-init apt operations to prevent first-boot kernel upgrades
       mkdir -p /target/etc/cloud/cloud.cfg.d
       printf 'apt:\n  preserve_sources_list: true\n  upgrade: false\n' > /target/etc/cloud/cloud.cfg.d/99-disable-apt-upgrade.cfg
+      # Disable cloud-init network config to prevent it from overwriting our netplan on first boot
+      printf 'network: {config: disabled}\n' > /target/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
       # Mask apt-daily timers to prevent background apt operations
       chroot /target systemctl mask apt-daily.service 2>>"$LOG" || true
       chroot /target systemctl mask apt-daily.timer 2>>"$LOG" || true
