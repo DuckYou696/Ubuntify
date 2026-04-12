@@ -510,8 +510,8 @@ autoinstall:
       echo "wl" >> /target/etc/modules
       printf '# Disable WiFi power management to prevent disconnects\noptions wl\n' > /target/etc/modprobe.d/wl.conf
       echo "options cfg80211 ieee80211_regdom=US" > /target/etc/modprobe.d/cfg80211.conf
-      # Create systemd service to run iwconfig power off on boot
-      printf '[Unit]\nDescription=Disable WiFi power management\nAfter=network.target\n\n[Service]\nType=oneshot\nExecStart=/sbin/iwconfig wl0 power off\nRemainAfterExit=yes\n\n[Install]\nWantedBy=multi-user.target\n' > /target/etc/systemd/system/wl-poweroff.service
+      # Create systemd service to auto-detect WiFi iface and disable power management
+      printf '[Unit]\nDescription=Disable WiFi power management\nAfter=network.target\n\n[Service]\nType=oneshot\nExecStart=/bin/sh -c "IW=$$(iwconfig 2>/dev/null | grep -oE \"^wl[pw]?[0-9]*\" | head -1) && [ -n \"$$IW\" ] && iwconfig \"$$IW\" power off || true"\nRemainAfterExit=yes\n\n[Install]\nWantedBy=multi-user.target\n' > /target/etc/systemd/system/wl-poweroff.service
       chroot /target systemctl enable wl-poweroff.service 2>>"$LOG" || echo "[late] WARN: wl-poweroff service enable failed" >> "$LOG"
       echo "[late] WiFi driver installed into target" >> "$LOG"
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":65,"stage":"late-dkms","status":"installed","message":"WiFi driver compiled and installed into target"}' > /dev/null 2>&1 || true
