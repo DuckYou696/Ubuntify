@@ -68,6 +68,9 @@ echo ""
 # ── Preflight checks ──
 
 [ -f "$ISO_PATH" ] || die "ISO not found: $ISO_PATH (pass path as argument)"
+command -v sgdisk >/dev/null 2>&1 || die "sgdisk not found. Install with: brew install gptfdisk"
+command -v comm >/dev/null 2>&1 || die "comm not found. Install with: brew install coreutils"
+command -v python3 >/dev/null 2>&1 || die "python3 not found. Install with: brew install python3"
 
 log "Running on: $(sw_vers -productName) $(sw_vers -productVersion)"
 log "ISO: $ISO_PATH"
@@ -286,7 +289,7 @@ cp "$ISO_MOUNT/cidata/"* "$ESP_MOUNT/cidata/" 2>/dev/null || true
 # to prevent curtin from deleting them during install
 log "Generating dual-boot storage config..."
 
-python3 - "$SCRIPT_DIR/autoinstall.yaml" "$ESP_MOUNT/cidata/user-data" "$INTERNAL_DISK" << 'PYEOF'
+python3 - "$SCRIPT_DIR/autoinstall.yaml" "$ESP_MOUNT/cidata/user-data" "$INTERNAL_DISK" << 'PYEOF' || die "Failed to generate dual-boot storage config"
 import sys, subprocess, re, os
 
 template_path = sys.argv[1]
@@ -329,8 +332,8 @@ for line in part_lines:
 
         part_type_guid = ''
         part_uuid = ''
-        offset_bytes = None
-        size_bytes = 0
+        first_sector = None
+        last_sector = None
 
         for info_line in info_text.split('\n'):
             if 'Partition type GUID code:' in info_line or 'Partition type code:' in info_line:
@@ -344,28 +347,22 @@ for line in part_lines:
             elif 'First sector:' in info_line:
                 sector_match = re.search(r'(\d+)', info_line.split(':')[-1])
                 if sector_match:
-                    offset_bytes = int(sector_match.group(1)) * 512
-
-        if offset_bytes is None:
-            print(f"WARNING: Could not parse First sector for partition {part_num}, skipping preserve", file=sys.stderr)
-            continue
-
-        # Determine partition path for Linux (autoinstall sees /dev/sda, not macOS /dev/disk0)
-        part_path = f"/dev/sda{part_num}"
-
-        # Get size in bytes from sgdisk sector info (macOS has no blockdev)
-        # We already parsed First sector above; also parse Last sector
-        last_sector = None
-        for info_line in info_text.split('\n'):
-            if 'Last sector:' in info_line:
+                    first_sector = int(sector_match.group(1))
+            elif 'Last sector:' in info_line:
                 sector_match = re.search(r'(\d+)', info_line.split(':')[-1])
                 if sector_match:
                     last_sector = int(sector_match.group(1))
-                    break
+
+        if first_sector is None:
+            print(f"WARNING: Could not parse First sector for partition {part_num}, skipping preserve", file=sys.stderr)
+            continue
         if last_sector is None:
             print(f"WARNING: Could not parse Last sector for partition {part_num}, skipping preserve", file=sys.stderr)
             continue
-        size_bytes = (last_sector - (offset_bytes // 512) + 1) * 512
+
+        offset_bytes = first_sector * 512
+        size_bytes = (last_sector - first_sector + 1) * 512
+        part_path = f"/dev/sda{part_num}"
 
         if size_bytes < 1048576:
             continue
@@ -450,7 +447,7 @@ new_storage = f"""  storage:
 
 # Replace the storage section in the template
 # Match from "  storage:" to the next top-level key (2-space indent section)
-pattern = r'  storage:\n    config:.*?(?=\n  [a-z]|\n[a-z]|\Z)'
+pattern = r'  storage:\n    config:.*?(?=\n  [a-z]|\Z)'
 replacement = new_storage.rstrip()
 new_content = re.sub(pattern, replacement, content, count=1, flags=re.DOTALL)
 
