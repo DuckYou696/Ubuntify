@@ -76,7 +76,7 @@ cd vm-test && sudo ./build-iso-vm.sh && ./create-vm.sh && ./test-vm.sh
 
 3. **GPU**: AMD FirePro uses built-in `amdgpu` driver. Only `nomodeset amdgpu.si.modeset=0` kernel params needed — pre-baked in GRUB config.
 
-4. **Network**: Uses `wl0` with `match: driver: wl` in netplan. Config generated with `printf` (not heredoc — indentation inside `|` blocks adds unwanted spaces). Uses `networkd` renderer (NOT NetworkManager). WiFi interface detection with 60-second timeout and multiple patterns. WiFi power management disabled via modprobe options and systemd unit. If primary netplan config fails, falls back to simplified config without match clause. Netplan failure is FATAL.
+4. **Network**: WiFi netplan generated in early-commands (after `wl` driver load + interface detection) with auto-detected interface name. The `network:` section cannot use `wifis:` because the driver doesn't exist in the live environment until early-commands compiles it. networkd does not support `match:` for `wifis:` (Ubuntu Bug #2073155), so the actual detected interface name must be used. Config generated with `printf` (not heredoc). Uses `networkd` renderer (NOT NetworkManager). WiFi power management disabled via modprobe options and systemd unit. Netplan failure is FATAL.
 
 5. **Storage (Dual-Boot)**: All existing partitions preserved with `preserve: true`. The `prepare-headless-deploy.sh` script dynamically generates storage config using Python + `sgdisk` after APFS resize. Partition type GUIDs normalized to lowercase for curtin. ESP labeled `cidata` for NoCloud discovery. Storage config uses string-based regex replacement (NOT `yaml.dump`) to preserve `|` block scalars.
 
@@ -141,7 +141,7 @@ Use `RED`, `GREEN`, `NC` color constants. Log to file with `tee`.
 ### YAML (autoinstall.yaml)
 - Use `|` block scalar for shell commands to avoid YAML parsing issues
 - Quote all strings containing special characters
-- Use `match: driver: wl` with logical interface IDs, not hardcoded names
+- Use auto-detected interface name in netplan (not `match:` — networkd does not support match: for wifis)
 - Use `printf` for netplan YAML generation (not heredoc)
 - Shell commands run via `sh -c` (dash) — POSIX-compatible syntax only
 - `${VAR}` for variable interpolation in JSON strings

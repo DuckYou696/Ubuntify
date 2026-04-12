@@ -211,6 +211,17 @@ autoinstall:
       fi
       wh "{\"progress\":22,\"stage\":\"prep-wifi\",\"status\":\"online\",\"message\":\"WiFi interface detected: ${WIFI_IFACE}\"}"
 
+      # Write netplan for live environment with detected interface name
+      # (networkd does not support match: for wifis — must use actual interface name)
+      rm -f /etc/netplan/50-cloud-init.yaml 2>/dev/null || true
+      { printf "network:\n"; printf "  version: 2\n"; printf "  renderer: networkd\n"; printf "  wifis:\n"; printf "    %s:\n" "$WIFI_IFACE"; printf "      dhcp4: true\n"; printf "      optional: true\n"; printf "      access-points:\n"; printf "        ATTj6pXatS:\n"; printf "          password: j75b39=z?mpg\n"; } > /etc/netplan/01-wifi.yaml
+      chmod 600 /etc/netplan/01-wifi.yaml
+      log "Live netplan written for interface: $WIFI_IFACE"
+      if command -v netplan 2>/dev/null >/dev/null; then
+        netplan generate 2>>"$LOG" || log "WARN: netplan generate failed in live env"
+        netplan apply 2>>"$LOG" || log "WARN: netplan apply failed in live env"
+      fi
+
       # Start SSH server for remote debugging
       wh '{"progress":23,"stage":"prep-ssh","status":"starting","message":"Starting SSH server for remote debugging"}'
       log "Starting SSH server for remote debugging..."
@@ -300,13 +311,6 @@ autoinstall:
   network:
     version: 2
     renderer: networkd
-    wifis:
-      wl0:
-        dhcp4: true
-        optional: true
-        access-points:
-          "ATTj6pXatS":
-            password: "j75b39=z?mpg"
 
   packages:
     - openssh-server
@@ -565,19 +569,11 @@ autoinstall:
       rm -f /target/etc/netplan/50-cloud-init.yaml 2>/dev/null || true
       mkdir -p /target/etc/netplan
       # Auto-detect WiFi interface name — networkd does not support match: for wifis
-      # (produces "networkd backend does not support wifi with match:" error)
-      _wifi_iface=""
-      _wcnt=0
-      while [ -z "$_wifi_iface" ] && [ "$_wcnt" -lt 60 ]; do
-        _wifi_iface=$(ip link show 2>/dev/null | grep -oE 'wl[^:]+' | head -1)
-        [ -n "$_wifi_iface" ] && break
-        _wcnt=$((_wcnt + 1))
-        sleep 1
-      done
-      if [ -n "$_wifi_iface" ]; then
-        { printf "network:\n"; printf "  version: 2\n"; printf "  renderer: networkd\n"; printf "  wifis:\n"; printf "    %s:\n" "$_wifi_iface"; printf "      dhcp4: true\n"; printf "      optional: true\n"; printf "      access-points:\n"; printf "        ATTj6pXatS:\n"; printf "          password: j75b39=z?mpg\n"; } > /target/etc/netplan/01-wifi.yaml
+      _wifi_late_iface=$(ip link show 2>/dev/null | grep -oE 'wl[^:]+' | head -1)
+      if [ -n "$_wifi_late_iface" ]; then
+        { printf "network:\n"; printf "  version: 2\n"; printf "  renderer: networkd\n"; printf "  wifis:\n"; printf "    %s:\n" "$_wifi_late_iface"; printf "      dhcp4: true\n"; printf "      optional: true\n"; printf "      access-points:\n"; printf "        ATTj6pXatS:\n"; printf "          password: j75b39=z?mpg\n"; } > /target/etc/netplan/01-wifi.yaml
         chmod 600 /target/etc/netplan/01-wifi.yaml
-        log "WiFi netplan written for interface: $_wifi_iface"
+        log "WiFi netplan written for interface: $_wifi_late_iface"
         if command -v netplan 2>/dev/null >/dev/null; then
             if ! netplan generate --root-dir /target 2>>"$LOG"; then
               die "netplan generate failed" 73
