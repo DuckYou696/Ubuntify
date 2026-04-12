@@ -386,7 +386,7 @@ autoinstall:
       # Verify WiFi health in installed system
       WIFI_IFACE_LATE=$(ip link show 2>/dev/null | grep -oE 'wl[^:]+' | head -1)
       if [ -n "$WIFI_IFACE_LATE" ]; then
-        if ! ip addr show "$WIFI_IFACE_LATE" 2>/dev/null | grep -q "inet "; then
+        if ! ip addr show "$WIFI_IFACE_LATE" 2>/dev/null | grep -q "inet " || ip addr show "$WIFI_IFACE_LATE" 2>/dev/null | grep -q "inet 169\.254\."; then
           log "WARN: WiFi lost IP during storage — attempting reconnect..."
           for drv in b43 ssb bcma brcmsmac wl; do rmmod $drv 2>/dev/null || true; done
           sleep 2
