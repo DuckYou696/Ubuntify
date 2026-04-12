@@ -92,7 +92,7 @@ autoinstall:
 
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":5,"stage":"prep-headers","status":"installing","message":"Installing kernel headers"}' > /dev/null 2>&1 || true
       echo "[early] Installing kernel headers..." >> "$LOG"
-      dpkg --force-depends -i $PKGS/linux-headers-${ABI_VER}_*.deb \
+      dpkg --force-depends --skip-same-version -i $PKGS/linux-headers-${ABI_VER}_*.deb \
               $PKGS/linux-headers-${KVER}_*.deb \
               $PKGS/linux-libc-dev_*.deb 2>>"$LOG" || { echo "[early] FATAL: kernel headers failed" >> "$LOG"; curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":5,"stage":"prep-headers","status":"failed","message":"FATAL: kernel headers install failed"}' > /dev/null 2>&1 || true; exit 1; }
 
@@ -113,7 +113,6 @@ autoinstall:
               $PKGS/make_*.deb $PKGS/build-essential_*.deb \
               $PKGS/fakeroot_*.deb $PKGS/libfakeroot_*.deb \
               $PKGS/patch_*.deb 2>>"$LOG" || { echo "[early] FATAL: build toolchain failed" >> "$LOG"; curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":10,"stage":"prep-toolchain","status":"failed","message":"FATAL: build toolchain install failed"}' > /dev/null 2>&1 || true; exit 1; }
-      ln -sf /usr/bin/x86_64-linux-gnu-gcc-13 /usr/bin/cc 2>/dev/null || true
 
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":13,"stage":"prep-dkms","status":"installing","message":"Installing DKMS and Broadcom driver source"}' > /dev/null 2>&1 || true
       echo "[early] Installing DKMS and Broadcom driver source..." >> "$LOG"
@@ -122,6 +121,8 @@ autoinstall:
       # after dpkg and build manually. So || true here, not fatal.
       dpkg --force-depends -i $PKGS/dkms_*.deb $PKGS/broadcom-sta-dkms_*.deb 2>>"$LOG" || echo "[early] WARN: dkms/broadcom dpkg returned non-zero (expected if postinst dkms build fails before patches)" >> "$LOG"
       # dkms add is handled by dpkg postinst (creates symlink /var/lib/dkms/.../source -> /usr/src/...)
+      # Postinst may have auto-triggered dkms build — remove any broken build before patching
+      dkms remove broadcom-sta/6.30.223.271 -k "$KVER" 2>/dev/null || true
       # Patches modify /usr/src/... which is visible through the symlink for dkms build
       # Apply DKMS patches for kernel 6.8+ compatibility from ISO
       if [ -d "$PKGS/dkms-patches" ]; then
@@ -222,7 +223,7 @@ autoinstall:
 
       curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":23,"stage":"prep-ssh","status":"starting","message":"Starting SSH server for remote debugging"}' > /dev/null 2>&1 || true
       echo "[early] Starting SSH server for remote debugging..." >> "$LOG"
-      apt-get -y install openssh-server 2>>"$LOG" || dpkg --force-depends -i /cdrom/pool/restricted/o/openssh/openssh-server_*.deb /cdrom/pool/restricted/o/openssh/openssh-sftp-server_*.deb 2>>"$LOG" || true
+      apt-get -y install openssh-server 2>>"$LOG" || dpkg --force-depends -i /cdrom/pool/main/o/openssh/openssh-server_*.deb /cdrom/pool/main/o/openssh/openssh-sftp-server_*.deb 2>>"$LOG" || true
       if [ -f /usr/sbin/sshd ]; then
         mkdir -p /run/sshd
         /usr/sbin/sshd -D -e &
@@ -330,7 +331,7 @@ autoinstall:
         device: root-disk
         size: 512M
         flag: boot
-        partition_type: C12A7328-F81F-11D2-BA4B-00A0C93EC93B
+        partition_type: c12a7328-f81f-11d2-ba4b-00a0c93ec93b
         grub_device: true
       - type: format
         id: efi-format
@@ -391,7 +392,7 @@ autoinstall:
           if [ -n "$WIFI_IFACE_LATE" ] && ! ip addr show "$WIFI_IFACE_LATE" 2>/dev/null | grep -q "inet "; then
             echo "[late] FATAL: WiFi reconnect failed — no network for late-commands" >> "$LOG"
             curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":29,"stage":"late-reconnect","status":"failed","message":"FATAL: WiFi lost and cannot reconnect"}' > /dev/null 2>&1 || true
-            if [ -f /usr/sbin/sshd ]; then /usr/sbin/sshd -D -e &; fi
+            if [ -f /usr/sbin/sshd ]; then /usr/sbin/sshd -D -e & fi
             while true; do sleep 60; done
           fi
         fi
@@ -457,7 +458,8 @@ autoinstall:
       # without patches, returning non-zero. This is expected — we apply patches
       # after dpkg and build manually. So non-fatal here.
       dpkg --root /target --force-depends -i $PKGS/dkms_*.deb $PKGS/broadcom-sta-dkms_*.deb 2>>"$LOG" || echo "[late] WARN: dkms/broadcom dpkg returned non-zero (expected if postinst dkms build fails before patches)" >> "$LOG"
-      # dkms add is handled by dpkg postinst (creates symlink in /var/lib/dkms/)
+      # dkms add handled by postinst; postinst may auto-trigger dkms build — clean before patching
+      chroot /target dkms remove broadcom-sta/6.30.223.271 -k "$KVER" 2>/dev/null || true
       # Apply DKMS patches for kernel 6.8+ compatibility (before dkms build, after dkms add)
       if [ -d "$PKGS/dkms-patches" ]; then
         echo "[late] Applying DKMS compatibility patches in target..." >> "$LOG"
@@ -555,7 +557,7 @@ autoinstall:
       chmod +x /target/etc/grub.d/40_macos
       chroot /target update-grub 2>>/run/macpro.log || echo "[late] WARN: update-grub failed" >> /run/macpro.log
       mkdir -p /target/usr/local/bin
-      printf '#!/bin/bash\nset -e\nEFIVARS="/sys/firmware/efi/efivars"\nif [ ! -d "$EFIVARS" ]; then\n  echo "ERROR: EFI variables not available" >&2\n  exit 1\nfi\nMACOS_BOOT=$(efibootmgr | grep -i "macos\\|apple\\|boot0" | head -1 | grep -o "Boot[0-9A-F]\\{4\\}" | sed "s/Boot//" || true)\nif [ -z "$MACOS_BOOT" ]; then\n  echo "WARNING: macOS boot entry not found in EFI variables" >&2\n  echo "Use Apple Boot Manager (hold Option at boot) instead" >&2\n  exit 1\nfi\nefibootmgr --bootnext "$MACOS_BOOT"\necho "macOS set as next boot device. Reboot to start macOS."\n' > /target/usr/local/bin/boot-macos
+      printf '#!/bin/bash\nset -e\nexport LIBEFIVAR_OPS=efivarfs\nEFIVARS="/sys/firmware/efi/efivars"\nif [ ! -d "$EFIVARS" ]; then\n  echo "ERROR: EFI variables not available" >&2\n  exit 1\nfi\nMACOS_BOOT=$(efibootmgr | grep -i "macos\\|apple\\|boot0" | head -1 | grep -o "Boot[0-9A-F]\\{4\\}" | sed "s/Boot//" || true)\nif [ -z "$MACOS_BOOT" ]; then\n  echo "WARNING: macOS boot entry not found in EFI variables" >&2\n  echo "Use Apple Boot Manager (hold Option at boot) instead" >&2\n  exit 1\nfi\nefibootmgr --bootnext "$MACOS_BOOT"\necho "macOS set as next boot device. Reboot to start macOS."\n' > /target/usr/local/bin/boot-macos
       chmod +x /target/usr/local/bin/boot-macos
       # Workaround for Apple EFI 1.1 bug (Bug #2040190)
       # efibootmgr may fail on Mac Pro 2013 due to EFI 1.1 firmware quirks
@@ -637,7 +639,7 @@ autoinstall:
           echo "[late] FATAL: Target system WiFi is broken — NOT rebooting to avoid headless brick" >> "$LOG"
           curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d '{"progress":97,"stage":"late-verify","status":"failed","message":"FATAL: Target WiFi broken — SSH remains active, NOT rebooting"}' > /dev/null 2>&1 || true
           # Keep SSH server running for remote debugging
-          if [ -f /usr/sbin/sshd ]; then
+          if [ -f /usr/sbin/sshd ] && ! pgrep -x sshd >/dev/null 2>&1; then
             /usr/sbin/sshd -D -e &
           fi
           # Block indefinitely so system doesn't reboot into broken state

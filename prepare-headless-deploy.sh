@@ -286,7 +286,7 @@ cp "$ISO_MOUNT/cidata/"* "$ESP_MOUNT/cidata/" 2>/dev/null || true
 # to prevent curtin from deleting them during install
 log "Generating dual-boot storage config..."
 
-python3 - "$SCRIPT_DIR/autoinstall.yaml" "$ESP_MOUNT/cidata/user-data" /dev/disk0 << 'PYEOF'
+python3 - "$SCRIPT_DIR/autoinstall.yaml" "$ESP_MOUNT/cidata/user-data" "$INTERNAL_DISK" << 'PYEOF'
 import sys, subprocess, re
 
 template_path = sys.argv[1]
@@ -347,9 +347,10 @@ for line in part_lines:
                     offset_bytes = int(sector_match.group(1)) * 512
 
         # Determine partition path
-        part_path = f"{disk_dev}s{part_num}"
-        if disk_dev.endswith('disk0'):
-            part_path = f"/dev/disk0s{part_num}"
+        # sgdisk -p shows partition paths for the specified disk device
+        # e.g., /dev/disk0 -> /dev/disk0s1, /dev/disk1 -> /dev/disk1s1
+        disk_name=$(basename "$disk_dev")
+        part_path = f"/dev/{disk_name}s{part_num}"
 
         # Get size in bytes from sgdisk sector info (macOS has no blockdev)
         # We already parsed First sector above; also parse Last sector
@@ -463,6 +464,13 @@ if [ ! -f "$ESP_MOUNT/cidata/user-data" ]; then
     warn "Dynamic generation failed — falling back to template"
     cp "$SCRIPT_DIR/autoinstall.yaml" "$ESP_MOUNT/cidata/user-data"
 fi
+# SAFETY: Validate that the generated user-data contains preserve:true entries.
+# Without them, curtin will WIPE existing macOS partitions during autoinstall.
+if ! grep -q 'preserve: true' "$ESP_MOUNT/cidata/user-data" 2>/dev/null; then
+    die "Generated user-data lacks preserve:true entries — macOS partitions would be wiped. Aborting."
+fi
+PRESERVE_COUNT=$(grep -c 'preserve: true' "$ESP_MOUNT/cidata/user-data" 2>/dev/null || echo "0")
+log "Preserve entries in user-data: $PRESERVE_COUNT"
 [ -f "$ESP_MOUNT/cidata/meta-data" ] || echo "instance-id: macpro-linux-i1" > "$ESP_MOUNT/cidata/meta-data"
 [ -f "$ESP_MOUNT/cidata/vendor-data" ] || touch "$ESP_MOUNT/cidata/vendor-data"
 
