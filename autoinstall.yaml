@@ -174,7 +174,7 @@ autoinstall:
       # Blacklist conflicting drivers and load wl
       for drv in b43 ssb bcma brcmsmac; do
           echo "blacklist $drv"
-      done > /etc/modprobe.d/blacklist-bcm.conf
+      done >> /etc/modprobe.d/blacklist-bcm.conf
       rmmod b43 ssb bcma brcmsmac 2>/dev/null || true
       log "Loading wl module..."
       modprobe wl 2>>"$LOG" || log "ERROR: modprobe wl failed"
@@ -542,10 +542,10 @@ autoinstall:
       grep -q "^wl$" /target/etc/modules 2>/dev/null || echo "wl" >> /target/etc/modules
       printf '# Disable WiFi power management to prevent disconnects\n' > /target/etc/modprobe.d/wl.conf
       echo "options cfg80211 ieee80211_regdom=US" > /target/etc/modprobe.d/cfg80211.conf
-      # Blacklist conflicting Broadcom drivers in target system
-      for drv in b43 ssb bcma brcmsmac; do
-        echo "blacklist $drv"
-      done > /target/etc/modprobe.d/blacklist-bcm.conf
+       # Blacklist conflicting Broadcom drivers in target system
+       for drv in b43 ssb bcma brcmsmac; do
+         echo "blacklist $drv"
+       done >> /target/etc/modprobe.d/blacklist-bcm.conf
       # Create helper script to disable WiFi power management (avoids systemd quoting hell)
       mkdir -p /target/usr/local/bin
       printf '#!/bin/sh\n# Disable WiFi power management to prevent disconnects\nIW=$(iwconfig 2>/dev/null | grep -oE "^wl[^[:space:]]+|^wlan[0-9]+" | head -1)\nif [ -n "$IW" ]; then\n  iwconfig "$IW" power off 2>/dev/null || true\nfi\n' > /target/usr/local/bin/wl-poweroff
@@ -593,8 +593,8 @@ autoinstall:
       log() { echo "[late] $1" >> "$LOG"; }
 
       wh '{"progress":75,"stage":"late-grub","status":"configuring","message":"Configuring GRUB bootloader"}'
-      mkdir -p /target/etc/default/grub.d
-      echo 'GRUB_CMDLINE_LINUX_DEFAULT="nomodeset amdgpu.si.modeset=0"' > /target/etc/default/grub.d/macpro.cfg
+       mkdir -p /target/etc/default/grub.d
+       echo 'GRUB_CMDLINE_LINUX_DEFAULT="nomodeset amdgpu.si.modeset=0 console=ttyS0,115200"' > /target/etc/default/grub.d/macpro.cfg
       sed -i 's/^GRUB_DISABLE_OS_PROBER=.*/GRUB_DISABLE_OS_PROBER=false/' /target/etc/default/grub
       if ! grep -q '^GRUB_DISABLE_OS_PROBER=' /target/etc/default/grub; then
         echo 'GRUB_DISABLE_OS_PROBER=false' >> /target/etc/default/grub
