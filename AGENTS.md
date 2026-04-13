@@ -12,7 +12,7 @@ Headless Ubuntu 24.04.4 LTS Server deployment for Mac Pro 2013 (MacPro6,1) with 
 - **GPU**: AMD FirePro D300/D500/D700 (amdgpu, needs `nomodeset amdgpu.si.modeset=0`)
 - **WiFi**: Broadcom BCM4360 (proprietary `wl` driver, NOT in Ubuntu)
 - **Storage**: Apple PCIe SSD via AHCI → `/dev/sda` (not NVMe)
-- **No Ethernet port** — WiFi is the only network path
+- **2 Ethernet ports** (unplugged) — WiFi is the only active network path
 - **Cannot disable SIP** — stuck with Apple's default bootloader (but `bless` works for dual-boot)
 - **MacBook available on network** — can serve as monitoring endpoint and fallback
 
@@ -70,7 +70,7 @@ cd vm-test && sudo ./build-iso-vm.sh && ./create-vm.sh && ./test-vm.sh
 
 ## Core Design Decisions
 
-1. **Extract-and-repack ISO modification**: The original ISO is extracted to a staging directory, custom files are overlaid, and the ISO is rebuilt using boot parameters preserved via `xorriso -report_el_torito as_mkisofs`. This properly preserves Ubuntu 24.04's appended EFI partition image and MBR hybrid boot structure. Volume label set to `cidata` for NoCloud discovery.
+1. **Extract-and-repack ISO modification**: The original ISO is extracted to a staging directory, custom files are overlaid, and the ISO is rebuilt using boot parameters preserved via `xorriso -report_el_torito as_mkisofs`. Boot params are flattened with `tr '\n' ' '` before `eval` — newlines in BOOT_PARAMS cause eval to treat each line as a separate command. This properly preserves Ubuntu 24.04's appended EFI partition image and MBR hybrid boot structure. Volume label set to `cidata` for NoCloud discovery.
 
 2. **Compile during install with DKMS patches**: The `early-commands` dynamically detects the running kernel (`KVER="$(uname -r)"`), validates matching headers exist, then installs from discovered `macpro-pkgs/` mount. The `broadcom-sta-dkms` postinst auto-runs `dkms add` (creates symlink). DKMS patches are applied to `/usr/src/` AFTER `dpkg -i` but BEFORE `dkms build`. Missing patches are FATAL. Failed builds have single-retry fallback with clean-then-rebuild. The `late-commands` repeats this in a 4-stage `dpkg --root /target` install with bind mounts for chroot DKMS.
 
@@ -78,17 +78,17 @@ cd vm-test && sudo ./build-iso-vm.sh && ./create-vm.sh && ./test-vm.sh
 
 4. **Network**: WiFi netplan generated in early-commands (after `wl` driver load + interface detection) with auto-detected interface name. The `network:` section cannot use `wifis:` because the driver doesn't exist in the live environment until early-commands compiles it. networkd does not support `match:` for `wifis:` (Ubuntu Bug #2073155), so the actual detected interface name must be used. Config generated with `printf` (not heredoc). Uses `networkd` renderer (NOT NetworkManager). WiFi power management disabled via modprobe options and systemd unit. Netplan failure is FATAL.
 
-5. **Storage (Dual-Boot)**: All existing partitions preserved with `preserve: true`. The `prepare-headless-deploy.sh` script dynamically generates storage config using Python + `sgdisk` after APFS resize. Partition type GUIDs normalized to lowercase for curtin. ESP labeled `cidata` for NoCloud discovery. Storage config uses string-based regex replacement (NOT `yaml.dump`) to preserve `|` block scalars.
+5. **Storage (Dual-Boot)**: All existing partitions preserved with `preserve: true`. The `prepare-headless-deploy.sh` script dynamically generates storage config using Python + `sgdisk` after APFS resize. Partition type GUIDs normalized to lowercase for curtin. ESP labeled `CIDATA` (uppercase) for NoCloud discovery — FAT32 volume names on macOS must be uppercase. Storage config uses string-based regex replacement (NOT `yaml.dump`) to preserve `|` block scalars.
 
-6. **Remote boot via `bless`**: `bless --setBoot --mount <esp> --nextonly` from macOS SSH. The `--nextonly` flag reverts boot to macOS if the firmware can't find a valid bootloader. GRUB parameters are pre-baked.
+6. **Remote boot via `bless`**: `bless --setBoot --mount <esp> --file <esp>/EFI/boot/bootx64.efi --nextonly` from macOS SSH. On FAT32 volumes, `bless` requires `--file` to specify the EFI bootloader path. The GPT partition type must be `C12A7328-F81F-11D2-BA4B-00A0C93EC93B` (EFI System Partition) — `diskutil eraseVolume` sets Microsoft Basic Data, which Apple EFI firmware rejects. The `--nextonly` flag reverts boot to macOS if the firmware can't find a valid bootloader. GRUB parameters are pre-baked.
 
 7. **macOS boot from GRUB**: GRUB cannot read APFS. The `40_macos` menu entry uses `fwsetup` to reboot to Apple Boot Manager. `efibootmgr` is installed with `LIBEFIVAR_OPS=efivarfs` workaround for Apple EFI 1.1 bug (Ubuntu Bug #2040190). `/usr/local/bin/boot-macos` uses `efibootmgr --bootnext` to set macOS as next boot device.
 
 8. **SSH into installer**: `early-commands` starts `sshd` after WiFi driver compilation. Falls back to ISO pool `.deb`s with `--force-depends` if network apt fails. `ssh: install-server: true` only applies to the target system.
 
-9. **NoCloud datasource**: ISO includes `/cidata/` for `ds=nocloud`. Volume label `cidata` enables discovery. `autoinstall` kernel param bypasses confirmation prompt.
+9. **NoCloud datasource**: ISO includes `/cidata/` for `ds=nocloud`. Volume label `CIDATA` (uppercase) enables discovery — cloud-init searches labels case-insensitively on Linux. `autoinstall` kernel param bypasses confirmation prompt.
 
-10. **Headless deploy safety**: `prepare-headless-deploy.sh` uses before/after partition diffing. APFS snapshots auto-deleted. Bless verified with `--info`. Error recovery trap resets macOS boot device. Pre-flight checks validate ISO integrity, SIP, FileVault, and webhook reachability.
+10. **Headless deploy safety**: `prepare-headless-deploy.sh` uses before/after partition diffing. APFS snapshots auto-deleted. Bless verified with `--info`. Error recovery trap reverts all changes: removes ESP partition, restores APFS container size (if resized), resets macOS boot device. Pre-flight checks validate ISO integrity, SIP, FileVault, and webhook reachability. Supports `--revert` flag for manual rollback.
 
 11. **Monitoring**: `macpro-monitor` receives Subiquity/Curtin events via webhook at DEBUG level, plus custom progress events via `curl` with `{progress, stage, status, message}` payloads. Progress percentages are monotonically increasing.
 
@@ -99,6 +99,20 @@ cd vm-test && sudo ./build-iso-vm.sh && ./create-vm.sh && ./test-vm.sh
 14. **Post-install verification and recovery**: Late-commands verify kernel, netplan, GRUB, WiFi module, and user account. If WiFi is broken in the target system, the installer does NOT reboot into a headless brick — keeps SSH alive with infinite sleep loop for remote debugging. Error logs saved to `/var/log/macpro-install/` (persists across reboots). UFW firewall denies all incoming except SSH.
 
 15. **Dynamic mount discovery**: `macpro-pkgs/` is discovered dynamically by searching `/cdrom`, `/isodevice`, and `/mnt` — path varies by boot method.
+
+16. **ISO extraction via xorriso on macOS**: macOS `hdiutil` cannot mount xorriso-built ISOs with hybrid MBR+GPT+appended EFI partition structures — this is a structural incompatibility, not a bug. The `prepare-headless-deploy.sh` script uses `xorriso -osirrox on -indev` to extract files directly to the ESP, bypassing mount entirely.
+
+17. **APFS container indirection on macOS**: The macOS partition table references APFS by physical partition (e.g. `disk0s2` contains `Apple_APFS Container disk1`), but `diskutil apfs` commands operate on the container reference (`disk1`). The `prepare-headless-deploy.sh` script parses both — using `diskutil info` on the partition to discover the container reference. `diskutil apfs resizeContainer` takes the container reference, NOT the physical partition.
+
+18. **ESP GPT type must be EFI System Partition**: `diskutil eraseVolume FAT32` sets the GPT partition type to Microsoft Basic Data (`EBD0A0A2-B9E5-4433-87C0-68B6B72699C7`), but Apple EFI firmware requires `C12A7328-F81F-11D2-BA4B-00A0C93EC93B` for `bless` to work. The `prepare-headless-deploy.sh` script uses `sgdisk --typecode` to fix this after formatting — but must unmount the ESP first since `sgdisk` cannot modify GPT on a mounted partition.
+
+19. **diskutil eraseVolume renumbers slices**: When `eraseVolume` changes the filesystem, macOS may assign a new slice number (e.g. creating `disk0s3` but formatting as `disk0s4`). Always find partitions by volume name, not by tracked device number.
+
+20. **bless on FAT32 requires --file**: On FAT32 EFI volumes, `bless --setBoot --mount` alone fails with `0xe00002e2`. Must also specify `--file <esp>/EFI/boot/bootx64.efi` to identify the EFI bootloader path.
+
+21. **cloud-init first-boot network overwrite**: cloud-init regenerates `/etc/netplan/50-cloud-init.yaml` on first boot, which can conflict with custom netplan configs. Disable cloud-init network config generation by writing `network: {config: disabled}` to `/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg` in late-commands.
+
+22. **Volume label CIDATA uppercase**: FAT32 volume names on macOS must be uppercase. cloud-init's NoCloud datasource searches volume labels case-insensitively on Linux, so `CIDATA` is discovered correctly.
 
 ## VirtualBox Test Environment
 
@@ -122,7 +136,7 @@ cd vm-test && sudo ./build-iso-vm.sh && ./create-vm.sh && ./test-vm.sh
 
 | Direction | Method | Command |
 |-----------|--------|---------|
-| macOS → Ubuntu | `bless` | `bless --setBoot --mount /Volumes/ESP --nextonly` then reboot |
+| macOS → Ubuntu | `bless` | `bless --setBoot --mount /Volumes/CIDATA --file /Volumes/CIDATA/EFI/boot/bootx64.efi --nextonly` then reboot |
 | Ubuntu → macOS | `efibootmgr` | `sudo boot-macos` then reboot |
 | Ubuntu → macOS | GRUB menu | Select "Reboot to Apple Boot Manager" |
 | Any → macOS | Firmware | Hold Option at boot (requires physical access) |
@@ -206,6 +220,14 @@ Patches use `#if LINUX_VERSION_CODE >= KERNEL_VERSION(...)` guards and compile c
 - **`bless --nextonly` limitation** — only reverts if firmware can't find bootloader, NOT on kernel panic
 - **Updates and kernel pinned** — all automatic updates disabled; kernel locked to 6.8.0-100-generic via apt preferences (block all at `-1`, allow only `6.8.0-100*` at `1001`); apt sources commented out; snap refresh held forever; cloud-init apt upgrade disabled
 - **ISO-only packages** — only packages from the ISO should be installed during and after installation; this prevents kernel updates that would break the WiFi driver
+- **BOOT_PARAMS must have newlines flattened** — `xorriso -report_el_torito as_mkisofs` outputs each param on its own line; `tr '\n' ' '` before `eval` is required or each line becomes a separate command
+- **macOS hdiutil cannot mount xorriso ISOs** — structural incompatibility with hybrid MBR+GPT+appended EFI; use `xorriso -osirrox` for extraction
+- **diskutil eraseVolume sets Microsoft Basic Data GPT type** — must `sgdisk --typecode` to `C12A7328` (EFI System Partition) after formatting; must unmount first
+- **bless --file required on FAT32** — `bless --setBoot --mount` alone fails with `0xe00002e2` on FAT32 volumes
+- **APFS container reference ≠ physical partition** — `diskutil apfs resizeContainer` takes container ref (e.g. `disk1`), not physical partition (`disk0s2`)
+- **diskutil eraseVolume renumbers slices** — find ESP by volume name, not tracked device number
+- **sgdisk cannot modify mounted GPT** — must unmount partition before `sgdisk --typecode`
+- **169.254.x.x link-local addresses** — must be excluded from DHCP lease checks; `grep -q "inet 169\.254\."` guard on all IP validation
 
 ## Context Management Rules
 

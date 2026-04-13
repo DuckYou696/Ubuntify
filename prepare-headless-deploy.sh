@@ -237,11 +237,11 @@ echo ""
 
 log "Step 3: Checking APFS container size..."
 
-CURRENT_SIZE=$(diskutil info "$APFS_CONTAINER" 2>/dev/null | grep "Disk Size" | grep -oE '[0-9]+\.[0-9]+ GB' || true)
-_APFS_ORIGINAL_SIZE=$(echo "$CURRENT_SIZE" | grep -oE '[0-9]+\.[0-9]+' || true)
+CURRENT_SIZE=$(diskutil info "$APFS_CONTAINER" 2>/dev/null | grep "Disk Size" | grep -oE '[0-9]+(\.[0-9]+)? GB' || true)
+_APFS_ORIGINAL_SIZE=$(echo "$CURRENT_SIZE" | grep -oE '[0-9]+(\.[0-9]+)?' || true)
 log "Current APFS size: ${CURRENT_SIZE:-unknown}"
 
-EXISTING_FREE_GB=$(diskutil list "$INTERNAL_DISK" 2>/dev/null | grep "(free" | grep -oE '[0-9]+\.[0-9]+ GB' | head -1 | grep -oE '[0-9]+\.[0-9]+' || true)
+EXISTING_FREE_GB=$(diskutil list "$INTERNAL_DISK" 2>/dev/null | grep "(free" | grep -oE '[0-9]+(\.[0-9]+)? GB' | head -1 | grep -oE '[0-9]+(\.[0-9]+)?' || true)
 if [ -n "$EXISTING_FREE_GB" ] && echo "$EXISTING_FREE_GB" | awk '{exit !($1 >= 5)}'; then
     log "Free space already ${EXISTING_FREE_GB}GB — skipping APFS resize"
 else
@@ -250,7 +250,7 @@ else
     log "Purging purgeable APFS space..."
     tmutil thinlocalsnapshots / 999999999999 2>/dev/null || true
 
-    USED_GB=$(diskutil apfs list "$APFS_CONTAINER" 2>/dev/null | grep "Capacity In Use By Volumes" | grep -oE '[0-9]+\.[0-9]+ GB' | head -1 | grep -oE '[0-9]+\.[0-9]+' || true)
+    USED_GB=$(diskutil apfs list "$APFS_CONTAINER" 2>/dev/null | grep "Capacity In Use By Volumes" | grep -oE '[0-9]+(\.[0-9]+)? GB' | head -1 | grep -oE '[0-9]+(\.[0-9]+)?' || true)
     if [ -z "$USED_GB" ]; then
         USED_GB=$(diskutil apfs list "$APFS_CONTAINER" 2>/dev/null | grep "Capacity In Use By Volumes" | grep -oE '[0-9]+ B' | head -1 | awk '{printf "%.1f", $1/1024/1024/1024}' || true)
     fi
@@ -263,7 +263,7 @@ else
         warn "Could not determine APFS usage — defaulting to ${TARGET_MACOS_GB}GB for macOS"
     fi
 
-    CURRENT_CONTAINER_GB=$(diskutil info "$APFS_CONTAINER" 2>/dev/null | grep "Disk Size" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)
+    CURRENT_CONTAINER_GB=$(diskutil info "$APFS_CONTAINER" 2>/dev/null | grep "Disk Size" | grep -oE '[0-9]+(\.[0-9]+)?' | head -1 || true)
     if [ -n "$CURRENT_CONTAINER_GB" ] && echo "$CURRENT_CONTAINER_GB $TARGET_MACOS_GB" | awk '{exit !($1 <= $2)}'; then
         log "APFS already at ${CURRENT_CONTAINER_GB}GB — no resize needed"
     else
@@ -287,7 +287,7 @@ if [ -n "$EXISTING_ESP" ]; then
     sleep 1
 fi
 
-FREE_START=$(diskutil list "$INTERNAL_DISK" | grep -E '\(free\)' -B1 | head -1 | grep -oE '[0-9]+\.[0-9]+ GB' || true)
+FREE_START=$(diskutil list "$INTERNAL_DISK" | grep -E '\(free' -B1 | head -1 | grep -oE '[0-9]+(\.[0-9]+)? GB' || true)
 log "Free space after resize: ${FREE_START:-unknown}"
 
 # Find the newly created partition using before/after diffing
@@ -298,8 +298,6 @@ sleep 2
 AFTER_PARTS=$(diskutil list "$INTERNAL_DISK" | grep -oE 'disk[0-9]+s[0-9]+' | sort)
 ESP_DEVICE=$(comm -13 <(echo "$BEFORE_PARTS") <(echo "$AFTER_PARTS") | head -1)
 [ -n "$ESP_DEVICE" ] || die "Cannot identify newly created ESP partition"
-
-_ESP_DEVICE="$ESP_DEVICE"
 
 log "ESP partition candidate: /dev/$ESP_DEVICE"
 diskutil eraseVolume FAT32 "$ESP_NAME" "/dev/$ESP_DEVICE" || \
@@ -324,8 +322,6 @@ echo ""
 # ── Step 5: Extract ISO contents to ESP ──
 
 log "Step 5: Extracting ISO contents to ESP..."
-
-command -v xorriso >/dev/null 2>&1 || die "xorriso not found. Install with: brew install xorriso"
 
 ESP_AVAIL=$(df -m "$ESP_MOUNT" | tail -1 | awk '{print $4}')
 ISO_TOTAL=$(du -sm "$ISO_PATH" 2>/dev/null | cut -f1 || echo "0")

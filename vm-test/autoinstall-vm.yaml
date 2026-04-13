@@ -502,7 +502,8 @@ autoinstall:
       log() { echo "[late] $1" >> "$LOG"; }
 
       wh '{"progress":75,"stage":"late-grub","status":"configuring","message":"Configuring GRUB bootloader"}'
-      echo 'GRUB_CMDLINE_LINUX_DEFAULT="nomodeset"' >> /target/etc/default/grub.d/macpro.cfg
+      mkdir -p /target/etc/default/grub.d
+      echo 'GRUB_CMDLINE_LINUX_DEFAULT="nomodeset"' > /target/etc/default/grub.d/macpro.cfg
       sed -i 's/^GRUB_DISABLE_OS_PROBER=.*/GRUB_DISABLE_OS_PROBER=false/' /target/etc/default/grub
       if ! grep -q '^GRUB_DISABLE_OS_PROBER=' /target/etc/default/grub; then
         echo 'GRUB_DISABLE_OS_PROBER=false' >> /target/etc/default/grub
@@ -511,7 +512,7 @@ autoinstall:
       chmod +x /target/etc/grub.d/40_macos
       chroot /target update-grub 2>>"$LOG" || log "WARN: update-grub failed"
       # Workaround for Apple EFI 1.1 bug (Bug #2040190)
-      echo 'LIBEFIVAR_OPS=efivarfs' >> /target/etc/environment
+      grep -q '^LIBEFIVAR_OPS=' /target/etc/environment 2>/dev/null || echo 'LIBEFIVAR_OPS=efivarfs' >> /target/etc/environment
       wh '{"progress":78,"stage":"late-grub","status":"configured","message":"GRUB bootloader configured"}'
 
     - |
