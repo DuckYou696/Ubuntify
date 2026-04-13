@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Ubuntu 24.04.4 LTS Server deployment for Mac Pro 2013 (MacPro6,1) with Broadcom BCM4360 WiFi. Three deployment methods supported: (1) internal ESP partition with autoinstall, (2) USB drive with autoinstall, (3) manual install from USB. Dual-boot and full-disk storage layouts. WiFi-only and Ethernet network configurations. SIP blocks bless NVRAM writes — boot device must be selected via keyboard (hold Option at startup) or System Preferences with a monitor.
+Ubuntu 24.04.4 LTS Server deployment for Mac Pro 2013 (MacPro6,1) with Broadcom BCM4360 WiFi. Four deployment methods supported: (1) internal ESP partition with autoinstall, (2) USB drive with autoinstall, (3) manual install from USB, (4) VM test in VirtualBox. Dual-boot and full-disk storage layouts. WiFi-only and Ethernet network configurations. SIP blocks bless NVRAM writes — boot device must be selected via keyboard (hold Option at startup) or System Preferences with a monitor.
 
 ## Hardware Specifications
 
@@ -89,7 +89,7 @@ cd vm-test && sudo ./build-iso-vm.sh && ./create-vm.sh && ./test-vm.sh
 
 4. **Network**: WiFi netplan generated in early-commands (after `wl` driver load + interface detection) with auto-detected interface name. The `network:` section cannot use `wifis:` because the driver doesn't exist in the live environment until early-commands compiles it. networkd does not support `match:` for `wifis:` (Ubuntu Bug #2073155), so the actual detected interface name must be used. Config generated with `printf` (not heredoc). Uses `networkd` renderer (NOT NetworkManager). WiFi power management disabled via modprobe options and systemd unit. Netplan failure is FATAL.
 
-5. **Storage (Dual-Boot)**: All existing partitions preserved with `preserve: true`. The `prepare-headless-deploy.sh` script dynamically generates storage config using Python + `sgdisk` after APFS resize. Partition type GUIDs normalized to lowercase for curtin. ESP labeled `CIDATA` (uppercase) for NoCloud discovery — FAT32 volume names on macOS must be uppercase. Storage config uses string-based regex replacement (NOT `yaml.dump`) to preserve `|` block scalars.
+5. **Storage (Dual-Boot)**: All existing partitions preserved with `preserve: true`. The `prepare-deployment.sh` script dynamically generates storage config using Python + `sgdisk` after APFS resize. Partition type GUIDs normalized to lowercase for curtin. ESP labeled `CIDATA` (uppercase) for NoCloud discovery — FAT32 volume names on macOS must be uppercase. Storage config uses string-based regex replacement (NOT `yaml.dump`) to preserve `|` block scalars.
 
 6. **Remote boot via `bless`**: `bless --setBoot --mount <esp> --file <esp>/EFI/boot/bootx64.efi --nextonly` from macOS SSH. On FAT32 volumes, `bless` requires `--file` to specify the EFI bootloader path. The GPT partition type must be `C12A7328-F81F-11D2-BA4B-00A0C93EC93B` (EFI System Partition) — `diskutil eraseVolume` sets Microsoft Basic Data, which Apple EFI firmware rejects. The `--nextonly` flag reverts boot to macOS if the firmware can't find a valid bootloader. GRUB parameters are pre-baked.
 
@@ -99,7 +99,7 @@ cd vm-test && sudo ./build-iso-vm.sh && ./create-vm.sh && ./test-vm.sh
 
 9. **NoCloud datasource**: ISO includes `/cidata/` for `ds=nocloud`. Volume label `CIDATA` (uppercase) enables discovery — cloud-init searches labels case-insensitively on Linux. `autoinstall` kernel param bypasses confirmation prompt.
 
-10. **Headless deploy safety**: `prepare-headless-deploy.sh` uses before/after partition diffing. APFS snapshots auto-deleted. Bless verified with `--info`. Error recovery trap reverts all changes: removes ESP partition, restores APFS container size (if resized), resets macOS boot device. Pre-flight checks validate ISO integrity, SIP, FileVault, and webhook reachability. Supports `--revert` flag for manual rollback.
+10. **Deploy safety**: `prepare-deployment.sh` uses before/after partition diffing. APFS snapshots auto-deleted. Bless verified with `--info`. Error recovery trap reverts all changes (method-dependent: internal partition removes ESP and restores APFS, USB unmounts device, VM test powers off VM). Pre-flight checks validate ISO integrity, SIP, FileVault, and webhook reachability. Supports `--revert` flag for manual rollback.
 
 11. **Monitoring**: `macpro-monitor` receives Subiquity/Curtin events via webhook at DEBUG level, plus custom progress events via `curl` with `{progress, stage, status, message}` payloads. Progress percentages are monotonically increasing.
 
@@ -111,7 +111,7 @@ cd vm-test && sudo ./build-iso-vm.sh && ./create-vm.sh && ./test-vm.sh
 
 15. **Dynamic mount discovery**: `macpro-pkgs/` is discovered dynamically by searching `/cdrom`, `/isodevice`, and `/mnt` — path varies by boot method.
 
-16. **ISO extraction via xorriso on macOS**: macOS `hdiutil` cannot mount xorriso-built ISOs with hybrid MBR+GPT+appended EFI partition structures — this is a structural incompatibility, not a bug. The `prepare-headless-deploy.sh` script uses `xorriso -osirrox on -indev` to extract files directly to the ESP, bypassing mount entirely.
+16. **ISO extraction via xorriso on macOS**: macOS `hdiutil` cannot mount xorriso-built ISOs with hybrid MBR+GPT+appended EFI partition structures — this is a structural incompatibility, not a bug. The `prepare-deployment.sh` script uses `xorriso -osirrox on -indev` to extract files directly to the ESP, bypassing mount entirely.
 
 17. **APFS container indirection on macOS**: The macOS partition table references APFS by physical partition (e.g. `disk0s2` contains `Apple_APFS Container disk1`), but `diskutil apfs` commands operate on the container reference (`disk1`). The `prepare-headless-deploy.sh` script parses both — using `diskutil info` on the partition to discover the container reference. `diskutil apfs resizeContainer` takes the container reference, NOT the physical partition.
 
@@ -121,13 +121,13 @@ cd vm-test && sudo ./build-iso-vm.sh && ./create-vm.sh && ./test-vm.sh
 
 20. **bless on FAT32 requires --file**: On FAT32 EFI volumes, `bless --setBoot --mount` alone fails with `0xe00002e2`. Must also specify `--file <esp>/EFI/boot/bootx64.efi` to identify the EFI bootloader path.
 
-21. **SIP blocks ALL NVRAM writes**: On Mac Pro 2013 with macOS 12.7.6 (SIP enabled), both `bless --setBoot` and `nvram` fail — even with correct GPT type and IOKit registration. The error `0xe00002e2` occurs at the NVRAM write step, not at IOKit matching. `systemsetup -setstartupdisk` also fails under SIP. Boot device must be set via blind keyboard (hold Option → Right Arrow → Enter to select CIDATA) or Recovery Mode (Cmd+R → `csrutil enable --without nvram` → `bless`). After Ubuntu installs, `efibootmgr` from Linux (no SIP) sets permanent boot order. `prepare-headless-deploy.sh` handles bless failure gracefully with blind boot instructions.
+21. **SIP blocks ALL NVRAM writes**: On Mac Pro 2013 with macOS 12.7.6 (SIP enabled), both `bless --setBoot` and `nvram` fail — even with correct GPT type and IOKit registration. The error `0xe00002e2` occurs at the NVRAM write step, not at IOKit matching. `systemsetup -setstartupdisk` also fails under SIP. Boot device must be set via blind keyboard (hold Option → Right Arrow → Enter to select CIDATA) or Recovery Mode (Cmd+R → `csrutil enable --without nvram` → `bless`). After Ubuntu installs, `efibootmgr` from Linux (no SIP) sets permanent boot order. `prepare-deployment.sh` handles bless failure gracefully with blind boot instructions.
 
 22. **newfs_msdos does not register with IOKit/DiskArbitration**: `newfs_msdos -F 32 -v CIDATA /dev/disk0s3` creates a valid FAT32 filesystem without changing the GPT partition type (unlike `diskutil eraseVolume`), but the volume is not registered with IOKit's DiskArbitration framework. Bless may fail because it cannot construct the IOMatch NVRAM dict. Unformatted partitions created by `diskutil addPartition %noformat%` also lack raw device nodes (`/dev/rdisk0sN`) — use block device `/dev/disk0sN` for `newfs_msdos`.
 
-21. **cloud-init first-boot network overwrite**: cloud-init regenerates `/etc/netplan/50-cloud-init.yaml` on first boot, which can conflict with custom netplan configs. Disable cloud-init network config generation by writing `network: {config: disabled}` to `/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg` in late-commands.
+23. **cloud-init first-boot network overwrite**: cloud-init regenerates `/etc/netplan/50-cloud-init.yaml` on first boot, which can conflict with custom netplan configs. Disable cloud-init network config generation by writing `network: {config: disabled}` to `/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg` in late-commands.
 
-22. **Volume label CIDATA uppercase**: FAT32 volume names on macOS must be uppercase. cloud-init's NoCloud datasource searches volume labels case-insensitively on Linux, so `CIDATA` is discovered correctly.
+24. **Volume label CIDATA uppercase**: FAT32 volume names on macOS must be uppercase. cloud-init's NoCloud datasource searches volume labels case-insensitively on Linux, so `CIDATA` is discovered correctly.
 
 ## VirtualBox Test Environment
 
@@ -140,21 +140,24 @@ cd vm-test && sudo ./build-iso-vm.sh && ./create-vm.sh && ./test-vm.sh
 
 ## Deployment Methods
 
-The `prepare-deployment.sh` script supports three deployment methods:
+The `prepare-deployment.sh` script supports four deployment methods:
 
 | Method | Description | Requirements |
 |--------|-------------|-------------|
 | 1) Internal partition | Copies Ubuntu installer to CIDATA ESP on internal disk | Monitor or keyboard for boot selection (SIP blocks bless) |
 | 2) USB drive | Creates bootable USB with Ubuntu installer | USB drive (4GB+), keyboard + monitor |
 | 3) Full manual | Creates standard Ubuntu USB (no autoinstall) | USB drive (4GB+), keyboard + monitor |
+| 4) VM test | Validates autoinstall flow in VirtualBox on this Mac | VirtualBox, 4GB+ disk space |
 
-Each method (except 3) offers two storage layouts:
+Each method (except 3 and 4) offers two storage layouts:
 - **Dual-boot**: Preserves macOS partitions with `preserve: true`, dynamically generates storage config
 - **Full disk**: Wipes entire disk, fresh GPT + EFI + /boot + / (simpler autoinstall)
 
 And two network configurations:
 - **WiFi only**: Must compile `wl` driver in early-commands before network (slower, requires DKMS packages)
 - **Ethernet available**: Network works immediately via DHCP, WiFi driver compiled for target system only
+
+Method 4 (VM test) uses fixed Ethernet and single disk — no storage or network selection needed.
 
 ## Boot Methods
 
@@ -256,12 +259,14 @@ Patches use `#if LINUX_VERSION_CODE >= KERNEL_VERSION(...)` guards and compile c
 - **ISO-only packages** — only packages from the ISO should be installed during and after installation; this prevents kernel updates that would break the WiFi driver
 - **BOOT_PARAMS must have newlines flattened** — `xorriso -report_el_torito as_mkisofs` outputs each param on its own line; `tr '\n' ' '` before `eval` is required or each line becomes a separate command
 - **macOS hdiutil cannot mount xorriso ISOs** — structural incompatibility with hybrid MBR+GPT+appended EFI; use `xorriso -osirrox` for extraction
-- **diskutil eraseVolume sets Microsoft Basic Data GPT type** — must `sgdisk --typecode` to `C12A7328` (EFI System Partition) after formatting; must unmount first
+- **diskutil eraseVolume sets Microsoft Basic Data GPT type** — use `diskutil addPartition %C12A7328-F81F-11D2-BA4B-00A0C93EC93B% %noformat% 5g` to create with correct ESP type, then `newfs_msdos -F 32 -v CIDATA` (sgdisk --typecode fails on macOS boot disk due to IOKit lock)
 - **bless --file required on FAT32** — `bless --setBoot --mount` alone fails with `0xe00002e2` on FAT32 volumes
 - **APFS container reference ≠ physical partition** — `diskutil apfs resizeContainer` takes container ref (e.g. `disk1`), not physical partition (`disk0s2`)
 - **diskutil eraseVolume renumbers slices** — find ESP by volume name, not tracked device number
 - **sgdisk cannot modify mounted GPT** — must unmount partition before `sgdisk --typecode`
 - **169.254.x.x link-local addresses** — must be excluded from DHCP lease checks; `grep -q "inet 169\.254\."` guard on all IP validation
+- **Serial console output** — GRUB `console=ttyS0,115200` param enables serial output for headless debugging; VirtualBox UART1 maps to `/tmp/vmtest-serial.log`
+- **Blacklist loop redirect** — for-loop writing to blacklist file must use `>>` (append), not `>` (overwrite); `>` truncates on each iteration, only keeping the last driver entry
 
 ## Context Management Rules
 

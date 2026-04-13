@@ -1,6 +1,6 @@
 # Mac Pro 2013 Ubuntu 24.04 — Autoinstall Deployment
 
-Automated Ubuntu Server 24.04.4 deployment for Mac Pro 2013 (MacPro6,1) with Broadcom BCM4360 WiFi. Three deployment methods: internal ESP partition, USB drive, or full manual. Supports dual-boot (macOS preserved) and full-disk layouts, WiFi-only and Ethernet configurations.
+Automated Ubuntu Server 24.04.4 deployment for Mac Pro 2013 (MacPro6,1) with Broadcom BCM4360 WiFi. Four deployment methods: internal ESP partition, USB drive, full manual, or VM test. Supports dual-boot (macOS preserved) and full-disk layouts, WiFi-only and Ethernet configurations.
 
 ## Specifications
 
@@ -30,8 +30,9 @@ Mac Pro has no Ethernet. Broadcom BCM4360 WiFi requires a proprietary `wl` drive
 3. For internal ESP: shrinks APFS, creates 5GB ESP, extracts ISO, generates autoinstall config, attempts bless
 4. For USB: creates bootable USB with autoinstall
 5. For manual: dd's standard Ubuntu ISO to USB
-6. Boot device selected via keyboard Option key (SIP blocks bless NVRAM writes)
-7. After Ubuntu installs, `efibootmgr` from Linux sets permanent boot order
+6. For VM test: builds VM ISO, creates VirtualBox VM, starts monitor — validates autoinstall flow without Mac Pro hardware
+7. Boot device selected via keyboard Option key (SIP blocks bless NVRAM writes)
+8. After Ubuntu installs, `efibootmgr` from Linux sets permanent boot order
 
 ## Files
 
@@ -76,6 +77,7 @@ Select deployment method:
 1. **Internal partition** — copies installer to CIDATA ESP on internal disk (requires APFS shrink for dual-boot)
 2. **USB drive** — creates bootable USB with autoinstall
 3. **Full manual** — creates standard Ubuntu USB (no autoinstall)
+4. **VM test** — validates autoinstall flow in VirtualBox (no Mac Pro hardware needed)
 
 Then select storage layout (dual-boot or full-disk) and network type (WiFi or Ethernet).
 
@@ -86,6 +88,8 @@ After deployment, select the boot device:
 1. Hold **Option** at startup chime
 2. Use arrow keys to select CIDATA (internal) or EFI Boot (USB)
 3. Press Enter to boot Ubuntu installer
+
+**Note**: USB dongle keyboards (e.g., Koorui BKM01) may not register the Option key in time due to reconnection delay after power cycle. Multi-key chords (Cmd+Option+R for Recovery) work because firmware uses a wider polling window.
 
 ### Revert a failed deployment
 
@@ -159,7 +163,7 @@ Patches use `#if LINUX_VERSION_CODE >= KERNEL_VERSION(...)` guards. Applied via 
 
 ### Dynamic Dual-Boot Storage Config
 
-The `prepare-headless-deploy.sh` script uses Python + `sgdisk` to:
+The `prepare-deployment.sh` script uses Python + `sgdisk` to:
 1. Read the GPT partition table after APFS resize
 2. Generate `preserve: true` entries for every existing partition
 3. Append new Ubuntu partitions in free space
@@ -258,3 +262,7 @@ cd vm-test && sudo ./build-iso-vm.sh && ./create-vm.sh && ./test-vm.sh
 ```
 
 VM uses Ethernet (`enp0s3`) instead of WiFi, DKMS compiles (fatal on failure) but driver init is non-fatal (no Broadcom HW). Webhook targets `10.0.2.2` via NAT.
+
+### Serial Console
+
+Both production and VM GRUB configs include `console=ttyS0,115200` for serial console output. In VirtualBox, UART1 is configured to log to `/tmp/vmtest-serial.log`.
