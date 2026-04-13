@@ -309,8 +309,8 @@ log "ESP partition candidate: /dev/$ESP_DEVICE"
 
 # Format as FAT32 with newfs_msdos — this does NOT change the GPT partition type
 # (unlike diskutil eraseVolume FAT32 which resets the type to Microsoft Basic Data)
-ESP_RDEV="/dev/r$(echo "$ESP_DEVICE" | sed 's/disk/rdisk/')"
-newfs_msdos -F 32 -v "$ESP_NAME" "$ESP_RDEV" || die "Failed to format ESP as FAT32"
+# Use the block device directly (raw device may not exist for unformatted partitions)
+newfs_msdos -F 32 -v "$ESP_NAME" "/dev/$ESP_DEVICE" || die "Failed to format ESP as FAT32"
 _ESP_CREATED=1
 sleep 1
 
