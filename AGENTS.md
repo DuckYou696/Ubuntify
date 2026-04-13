@@ -2,27 +2,28 @@
 
 ## Project Overview
 
-Headless Ubuntu 24.04.4 LTS Server deployment for Mac Pro 2013 (MacPro6,1) with Broadcom BCM4360 WiFi. The machine is only accessible via SSH — zero physical access (no keyboard, monitor, or mouse). Cannot disable macOS SIP to install custom bootloader. The deployment preserves macOS via dual-boot, dynamically generates the autoinstall storage config to mark existing partitions as `preserve: true`, uses `bless` to set boot device, and reboots into an automated autoinstall.
+Ubuntu 24.04.4 LTS Server deployment for Mac Pro 2013 (MacPro6,1) with Broadcom BCM4360 WiFi. Three deployment methods supported: (1) internal ESP partition with autoinstall, (2) USB drive with autoinstall, (3) manual install from USB. Dual-boot and full-disk storage layouts. WiFi-only and Ethernet network configurations. SIP blocks bless NVRAM writes — boot device must be selected via keyboard (hold Option at startup) or System Preferences with a monitor.
 
 ## Hardware Specifications
 
 - **Model**: Mac Pro 2013 (MacPro6,1)
 - **Current OS**: macOS 12.7.6 (Monterey)
-- **Access**: SSH only — zero physical access
+- **Access**: SSH + local keyboard/monitor (for boot selection)
 - **GPU**: AMD FirePro D300/D500/D700 (amdgpu, needs `nomodeset amdgpu.si.modeset=0`)
 - **WiFi**: Broadcom BCM4360 (proprietary `wl` driver, NOT in Ubuntu)
 - **Storage**: Apple PCIe SSD via AHCI → `/dev/sda` (not NVMe)
-- **2 Ethernet ports** (unplugged) — WiFi is the only active network path
-- **Cannot disable SIP** — stuck with Apple's default bootloader (but `bless` works for dual-boot)
+- **2 Ethernet ports** (may be plugged in for Ethernet installs)
+- **SIP always enabled** — blocks bless NVRAM writes (0xe00002e2), boot device must be selected via keyboard Option key or System Preferences Startup Disk
 - **MacBook available on network** — can serve as monitoring endpoint and fallback
 
 ## Project Structure
 
 ```
 /Users/djtchill/Desktop/Mac/
-├── autoinstall.yaml                 # Autoinstall configuration (added to ISO at /)
+├── autoinstall.yaml                 # Autoinstall configuration (base template — WiFi + dual-boot)
 ├── build-iso.sh                     # ISO builder (xorriso extract-and-repack) — injects config, cidata, GRUB, packages
-├── prepare-headless-deploy.sh       # macOS-side script: repartition + extract + bless + verify via SSH
+├── prepare-deployment.sh             # Interactive deployment script: ESP partition, USB, or manual
+├── prepare-headless-deploy.sh.bak   # Backup of original headless-only deploy script
 ├── packages/                        # .deb files for driver compilation (34 debs)
 │   ├── broadcom-sta-dkms_*.deb      # Broadcom WiFi driver source
 │   ├── dkms_*.deb                   # Dynamic Kernel Module Support
@@ -55,6 +56,16 @@ Headless Ubuntu 24.04.4 LTS Server deployment for Mac Pro 2013 (MacPro6,1) with 
 ### Build ISO
 ```bash
 sudo ./build-iso.sh
+```
+
+### Deploy (interactive menu)
+```bash
+sudo ./prepare-deployment.sh
+```
+
+### Revert failed deployment
+```bash
+sudo ./prepare-deployment.sh --revert
 ```
 
 ### Node.js Monitor
@@ -127,24 +138,42 @@ cd vm-test && sudo ./build-iso-vm.sh && ./create-vm.sh && ./test-vm.sh
 | `create-vm.sh` | VirtualBox VM: EFI, 4 CPUs, 4.5GB RAM, 25GB disk, NAT, SSH port forward |
 | `test-vm.sh` | Run/monitor/SSH/grab logs/stop/destroy |
 
+## Deployment Methods
+
+The `prepare-deployment.sh` script supports three deployment methods:
+
+| Method | Description | Requirements |
+|--------|-------------|-------------|
+| 1) Internal partition | Copies Ubuntu installer to CIDATA ESP on internal disk | Monitor or keyboard for boot selection (SIP blocks bless) |
+| 2) USB drive | Creates bootable USB with Ubuntu installer | USB drive (4GB+), keyboard + monitor |
+| 3) Full manual | Creates standard Ubuntu USB (no autoinstall) | USB drive (4GB+), keyboard + monitor |
+
+Each method (except 3) offers two storage layouts:
+- **Dual-boot**: Preserves macOS partitions with `preserve: true`, dynamically generates storage config
+- **Full disk**: Wipes entire disk, fresh GPT + EFI + /boot + / (simpler autoinstall)
+
+And two network configurations:
+- **WiFi only**: Must compile `wl` driver in early-commands before network (slower, requires DKMS packages)
+- **Ethernet available**: Network works immediately via DHCP, WiFi driver compiled for target system only
+
 ## Boot Methods
 
 | Method | Physical Access? | Status |
 |--------|-----------------|--------|
-| Internal ESP + blind keyboard (Option→Right→Enter) | Keyboard (no monitor) | Implemented |
-| Internal ESP + Recovery Mode (Cmd+R→csrutil→bless) | Keyboard (no monitor) | Fallback |
-| Internal disk + `bless` via SSH | None required | SIP blocks NVRAM — broken |
-| NetBoot from MacBook | None required | Not feasible (requires macOS Server + BSDP) |
-| Target Disk Mode | Brief physical | Fallback only |
+| Keyboard Option key at startup | Keyboard (no monitor needed for USB) | Implemented — wireless dongle keyboards may not register in time |
+| System Preferences Startup Disk | Monitor required | SIP blocks bless from SSH, but GUI works with monitor |
+| Recovery Mode → csrutil enable --without nvram | Keyboard (hold Cmd+Option+R) | Works — then bless succeeds from macOS |
 
 ## Switching Between macOS and Ubuntu
 
 | Direction | Method | Command |
 |-----------|--------|---------|
-| macOS → Ubuntu | `bless` | `bless --setBoot --mount /Volumes/CIDATA --file /Volumes/CIDATA/EFI/boot/bootx64.efi --nextonly` then reboot |
+| macOS → Ubuntu | Startup Disk GUI | System Preferences → Startup Disk → select CIDATA (requires monitor) |
+| macOS → Ubuntu | Keyboard Option key | Hold Option at chime → select CIDATA from Startup Manager |
+| macOS → Ubuntu | Recovery Mode | Cmd+R → Terminal → `csrutil enable --without nvram` → reboot → `bless --nextonly` |
 | Ubuntu → macOS | `efibootmgr` | `sudo boot-macos` then reboot |
 | Ubuntu → macOS | GRUB menu | Select "Reboot to Apple Boot Manager" |
-| Any → macOS | Firmware | Hold Option at boot (requires physical access) |
+| Any → macOS | Firmware | Hold Option at boot (requires keyboard) |
 
 ## Code Style Guidelines
 

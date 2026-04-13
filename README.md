@@ -1,6 +1,6 @@
-# Mac Pro 2013 Ubuntu 24.04 — Headless Autoinstall
+# Mac Pro 2013 Ubuntu 24.04 — Autoinstall Deployment
 
-Automated Ubuntu Server 24.04.4 dual-boot deployment for a headless Mac Pro 2013 (MacPro6,1) with Broadcom BCM4360 WiFi, installed entirely over SSH with zero physical access. macOS is preserved.
+Automated Ubuntu Server 24.04.4 deployment for Mac Pro 2013 (MacPro6,1) with Broadcom BCM4360 WiFi. Three deployment methods: internal ESP partition, USB drive, or full manual. Supports dual-boot (macOS preserved) and full-disk layouts, WiFi-only and Ethernet configurations.
 
 ## Specifications
 
@@ -9,13 +9,13 @@ Automated Ubuntu Server 24.04.4 dual-boot deployment for a headless Mac Pro 2013
 - **GPU**: AMD FirePro D300/D500/D700 (amdgpu driver, `nomodeset amdgpu.si.modeset=0`)
 - **WiFi**: Broadcom BCM4360 — requires proprietary `wl` driver, not in Ubuntu
 - **Storage**: Apple PCIe SSD via AHCI → `/dev/sda` (not NVMe)
-- **No Ethernet port** — WiFi is the only network path
+- **2 Ethernet ports** (may be plugged in for Ethernet installs)
 
 ### Operational Constraints
-- **Zero physical access** — no keyboard, monitor, or mouse available
-- **macOS 12.7.6 running** — accessible only via SSH
-- **Cannot disable SIP** — stuck with Apple's default bootloader (but `bless` works for dual-boot)
-- **Dual-boot: macOS preserved** — existing partitions marked `preserve: true`; Ubuntu installed in free space
+- **Keyboard + monitor available** — for boot selection (hold Option at startup)
+- **macOS 12.7.6 running** — accessible via SSH
+- **SIP always enabled** — blocks bless NVRAM writes; boot device selected via keyboard Option key or System Preferences Startup Disk
+- **Dual-boot or full-disk** — dual-boot preserves macOS with `preserve: true`; full-disk wipes everything
 - **MacBook available on network** — can serve as monitoring/webhook endpoint
 
 ### Circular Dependency Problem
@@ -23,12 +23,15 @@ Mac Pro has no Ethernet. Broadcom BCM4360 WiFi requires a proprietary `wl` drive
 
 ## Solution Overview
 
-**Extract-and-repack ISO modification + remote boot via `bless`**:
+**Interactive deployment via `prepare-deployment.sh`**:
 
 1. Build a modified Ubuntu Server ISO: extract original, overlay custom files, repack preserving original EFI boot structure
-2. Transfer ISO to Mac Pro, run `prepare-headless-deploy.sh` via SSH — shrinks APFS, creates 5GB ESP, extracts ISO contents, generates dual-boot autoinstall config, sets boot device
-3. `bless --setBoot --nextonly` sets ESP as next boot device (reverts to macOS if installer fails)
-4. Reboot → Mac Pro boots into Ubuntu installer → autoinstall runs headlessly
+2. Run `prepare-deployment.sh` — interactive menu selects method, storage layout, and network type
+3. For internal ESP: shrinks APFS, creates 5GB ESP, extracts ISO, generates autoinstall config, attempts bless
+4. For USB: creates bootable USB with autoinstall
+5. For manual: dd's standard Ubuntu ISO to USB
+6. Boot device selected via keyboard Option key (SIP blocks bless NVRAM writes)
+7. After Ubuntu installs, `efibootmgr` from Linux sets permanent boot order
 
 ## Files
 
@@ -38,7 +41,8 @@ Mac Pro has no Ethernet. Broadcom BCM4360 WiFi requires a proprietary `wl` drive
 | `build-iso.sh` | Builds modified ISO: extract, overlay, repack preserving EFI boot |
 | `packages/` | .deb files for driver compilation (34 packages) |
 | `packages/dkms-patches/` | 6 DKMS patches for kernel 6.8+ compatibility (series file + *.patch) |
-| `prepare-headless-deploy.sh` | macOS-side script: repartition, extract ISO, generate dual-boot config, bless, verify |
+| `prepare-deployment.sh` | Interactive deployment script: ESP partition, USB, or manual |
+| `prepare-headless-deploy.sh.bak` | Backup of original headless-only deploy script |
 | `prereqs/` | Stock Ubuntu 24.04.4 Server ISO (`*.iso` gitignored) |
 | `macpro-monitor/` | Node.js webhook server for installation monitoring (3-pane dashboard) |
 | `vm-test/` | VirtualBox test environment for DKMS compilation validation |
@@ -56,31 +60,37 @@ brew install xorriso gptfdisk python3
 
 ## Quick Start
 
-### Headless Deploy (Zero Physical Access)
+### Build the ISO (required for all methods)
 
 ```bash
-# 1. Build the ISO and transfer to Mac Pro
 sudo ./build-iso.sh
-scp ubuntu-macpro.iso macpro:~
-
-# 2. Start webhook monitor on MacBook
-cd macpro-monitor && ./start.sh
-
-# 3. SSH into Mac Pro and run the deploy script
-ssh macpro
-sudo ./prepare-headless-deploy.sh ~/ubuntu-macpro.iso
-
-# 4. Monitor installation via webhook; SSH into installer for debugging
 ```
 
-### USB Boot (Requires Physical Access)
+### Deploy (interactive menu)
 
 ```bash
-sudo ./build-iso.sh
-diskutil list  # find your USB drive
-diskutil unmountDisk /dev/diskN
-sudo dd if=ubuntu-macpro.iso of=/dev/diskN bs=1m
-# Boot from USB — GRUB auto-selects autoinstall after 3 seconds
+sudo ./prepare-deployment.sh
+```
+
+Select deployment method:
+1. **Internal partition** — copies installer to CIDATA ESP on internal disk (requires APFS shrink for dual-boot)
+2. **USB drive** — creates bootable USB with autoinstall
+3. **Full manual** — creates standard Ubuntu USB (no autoinstall)
+
+Then select storage layout (dual-boot or full-disk) and network type (WiFi or Ethernet).
+
+### Boot Selection
+
+After deployment, select the boot device:
+
+1. Hold **Option** at startup chime
+2. Use arrow keys to select CIDATA (internal) or EFI Boot (USB)
+3. Press Enter to boot Ubuntu installer
+
+### Revert a failed deployment
+
+```bash
+sudo ./prepare-deployment.sh --revert
 ```
 
 ### Start Webhook Monitor
@@ -129,7 +139,9 @@ Patches use `#if LINUX_VERSION_CODE >= KERNEL_VERSION(...)` guards. Applied via 
 7. Wait for WiFi interface (60s timeout), verify connectivity (scan + DHCP + HTTP)
 8. Start SSH server (fallback to ISO pool `.deb`s with `--force-depends`)
 
-**network**: `wl0` with `match: driver: wl`, `networkd` renderer, WiFi credentials
+**network** (WiFi-only): No `wifis:` section (networkd doesn't support `match:` for wifis). Netplan generated in early-commands after driver load with auto-detected interface name.
+
+**network** (Ethernet available): `ethernets:` with `match: name: "en*"` and `dhcp4: true`
 
 **storage (dual-boot)**: All existing partitions `preserve: true`. New partitions in free space only: EFI (512M), /boot (1G), / (rest).
 
