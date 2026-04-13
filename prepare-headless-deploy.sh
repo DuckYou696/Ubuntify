@@ -5,7 +5,7 @@ export PATH="/usr/local/bin:/usr/local/sbin:$PATH"
 
 readonly SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 readonly ISO_PATH="${1:-${SCRIPT_DIR}/ubuntu-macpro.iso}"
-readonly ESP_NAME="cidata"
+readonly ESP_NAME="CIDATA"
 readonly ESP_SIZE="5g"
 APFS_CONTAINER=""
 
