@@ -267,9 +267,9 @@ else
     if [ -n "$CURRENT_CONTAINER_GB" ] && echo "$CURRENT_CONTAINER_GB $TARGET_MACOS_GB" | awk '{exit !($1 <= $2)}'; then
         log "APFS already at ${CURRENT_CONTAINER_GB}GB — no resize needed"
     else
-    diskutil apfs resizeContainer "$APFS_CONTAINER" "${TARGET_MACOS_GB}g" || die "APFS resize failed"
-    _APFS_RESIZED=1
-    log "APFS container resized to ${TARGET_MACOS_GB}GB"
+        diskutil apfs resizeContainer "$APFS_CONTAINER" "${TARGET_MACOS_GB}g" || die "APFS resize failed"
+        _APFS_RESIZED=1
+        log "APFS container resized to ${TARGET_MACOS_GB}GB"
     fi
 fi
 echo ""
@@ -311,12 +311,18 @@ log "ESP mounted at: $ESP_MOUNT"
 
 # Set GPT partition type to EFI System Partition — Apple EFI firmware requires
 # this for bless to work (diskutil eraseVolume sets it to Microsoft Basic Data)
-ESP_PART_NUM=$(echo "$ESP_DEVICE" | grep -oE '[0-9]+$')
-diskutil unmount "$ESP_MOUNT" 2>/dev/null || true
-sgdisk --typecode="${ESP_PART_NUM}":C12A7328-F81F-11D2-BA4B-00A0C93EC93B "$INTERNAL_DISK" || \
-    warn "Could not set EFI partition type — bless may fail"
-diskutil mount "$ESP_MOUNT" 2>/dev/null || true
-[ -d "$ESP_MOUNT" ] || die "ESP not remounted after partition type change"
+# Find the ACTUAL partition number — diskutil eraseVolume may renumber the slice
+ESP_ACTUAL_DEV=$(diskutil list "$INTERNAL_DISK" 2>/dev/null | grep "$ESP_NAME" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
+if [ -n "$ESP_ACTUAL_DEV" ]; then
+    ESP_PART_NUM=$(echo "$ESP_ACTUAL_DEV" | grep -oE '[0-9]+$')
+    diskutil unmount "$ESP_MOUNT" 2>/dev/null || true
+    sgdisk --typecode="${ESP_PART_NUM}":C12A7328-F81F-11D2-BA4B-00A0C93EC93B "$INTERNAL_DISK" || \
+        warn "Could not set EFI partition type — bless may fail"
+    diskutil mount "$ESP_MOUNT" 2>/dev/null || true
+    [ -d "$ESP_MOUNT" ] || die "ESP not remounted after partition type change"
+else
+    warn "Could not find CIDATA partition for GPT typecode change — bless may fail"
+fi
 echo ""
 
 # ── Step 5: Extract ISO contents to ESP ──
@@ -606,7 +612,7 @@ echo ""
 
 log "Step 6: Verifying ESP contents..."
 REQUIRED_FILES=(
-    "EFI/boot/BOOTX64.EFI"
+    "EFI/boot/bootx64.efi"
     "EFI/boot/grub.cfg"
     "casper/vmlinuz"
     "casper/initrd"
@@ -616,7 +622,8 @@ REQUIRED_FILES=(
 )
 ALL_OK=true
 for f in "${REQUIRED_FILES[@]}"; do
-    if [ -f "$ESP_MOUNT/$f" ]; then
+    # FAT32 is case-insensitive — check both xorriso lowercase (bootx64.efi) and standard uppercase (BOOTX64.EFI)
+    if [ -f "$ESP_MOUNT/$f" ] || [ -f "$ESP_MOUNT/$(echo "$f" | tr 'a-z' 'A-Z')" ]; then
         log "  ✓ $f"
     else
         warn "  ✗ $f (not found)"
