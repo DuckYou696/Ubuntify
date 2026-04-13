@@ -290,47 +290,46 @@ fi
 FREE_START=$(diskutil list "$INTERNAL_DISK" | grep -E '\(free' -B1 | head -1 | grep -oE '[0-9]+(\.[0-9]+)? GB' || true)
 log "Free space after resize: ${FREE_START:-unknown}"
 
-# Find the newly created partition using before/after diffing
-# This is safer than 'tail -1' which could pick the wrong partition on re-run
+# Create the ESP partition using diskutil addPartition with the EFI System Partition
+# GPT type GUID (%C12A7328-F81F-11D2-BA4B-00A0C93EC93B%). This ensures correct GPT
+# type from creation — diskutil eraseVolume FAT32 sets Microsoft Basic Data type
+# which Apple EFI firmware rejects for bless.
+#
+# diskutil addPartition format: device %GPT-Type-UUID% name size
+# The %noformat% name skips filesystem creation (we format manually with newfs_msdos).
 BEFORE_PARTS=$(diskutil list "$INTERNAL_DISK" | grep -oE 'disk[0-9]+s[0-9]+' | sort)
-diskutil addPartition "$INTERNAL_DISK" %noformat% "$ESP_NAME" "$ESP_SIZE" || die "Failed to create ESP partition"
+diskutil addPartition "$INTERNAL_DISK" %C12A7328-F81F-11D2-BA4B-00A0C93EC93B% %noformat% "$ESP_SIZE" || \
+    die "Failed to create ESP partition with EFI System Partition type"
 sleep 2
 AFTER_PARTS=$(diskutil list "$INTERNAL_DISK" | grep -oE 'disk[0-9]+s[0-9]+' | sort)
 ESP_DEVICE=$(comm -13 <(echo "$BEFORE_PARTS") <(echo "$AFTER_PARTS") | head -1)
 [ -n "$ESP_DEVICE" ] || die "Cannot identify newly created ESP partition"
 
 log "ESP partition candidate: /dev/$ESP_DEVICE"
-diskutil eraseVolume FAT32 "$ESP_NAME" "/dev/$ESP_DEVICE" || \
-    die "Failed to format ESP partition as FAT32"
+
+# Format as FAT32 with newfs_msdos — this does NOT change the GPT partition type
+# (unlike diskutil eraseVolume FAT32 which resets the type to Microsoft Basic Data)
+ESP_RDEV="/dev/r$(echo "$ESP_DEVICE" | sed 's/disk/rdisk/')"
+newfs_msdos -F 32 -v "$ESP_NAME" "$ESP_RDEV" || die "Failed to format ESP as FAT32"
 _ESP_CREATED=1
 sleep 1
 
+# Mount the freshly formatted ESP
+diskutil mount "/dev/$ESP_DEVICE" 2>/dev/null || true
 ESP_MOUNT="/Volumes/$ESP_NAME"
-[ -d "$ESP_MOUNT" ] || die "ESP not mounted at $ESP_MOUNT"
+if [ ! -d "$ESP_MOUNT" ]; then
+    # Volume name may not match — find by device
+    ESP_MOUNT=$(diskutil info "/dev/$ESP_DEVICE" 2>/dev/null | grep "Mount Point" | awk '{$1=$2=""; print substr($0,3)}' | sed 's/^[[:space:]]*//' || true)
+fi
+[ -d "$ESP_MOUNT" ] || die "ESP not mounted after format"
 log "ESP mounted at: $ESP_MOUNT"
 
-# Set GPT partition type to EFI System Partition — Apple EFI firmware requires
-# this for bless to work (diskutil eraseVolume sets it to Microsoft Basic Data)
-# Find the ACTUAL partition number — diskutil eraseVolume may renumber the slice
+# Verify GPT type is EFI System Partition
 ESP_ACTUAL_DEV=$(diskutil list "$INTERNAL_DISK" 2>/dev/null | grep "$ESP_NAME" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
-ESPTYPE_FIXED=0
 if [ -n "$ESP_ACTUAL_DEV" ]; then
-    ESP_PART_NUM=$(echo "$ESP_ACTUAL_DEV" | grep -oE '[0-9]+$')
-    diskutil unmount "$ESP_MOUNT" 2>/dev/null || true
-    # Try sgdisk with raw device first (macOS may lock /dev/diskN for writing)
-    RDISK="/dev/r$(basename "$INTERNAL_DISK")"
-    sgdisk --typecode="${ESP_PART_NUM}":C12A7328-F81F-11D2-BA4B-00A0C93EC93B "$RDISK" 2>/dev/null && ESPTYPE_FIXED=1 || \
-    sgdisk --typecode="${ESP_PART_NUM}":C12A7328-F81F-11D2-BA4B-00A0C93EC93B "$INTERNAL_DISK" 2>/dev/null && ESPTYPE_FIXED=1 || \
-        warn "Could not set EFI partition type (disk locked) — trying bless anyway"
-    if [ "$ESPTYPE_FIXED" -eq 1 ]; then
-        log "EFI partition type set to C12A7328 (EFI System Partition)"
-    fi
-    diskutil mount "/dev/$ESP_ACTUAL_DEV" 2>/dev/null || true
-    if [ ! -d "$ESP_MOUNT" ]; then
-        die "ESP not remounted after partition type change — try 'diskutil mount /dev/$ESP_ACTUAL_DEV' manually"
-    fi
+    log "ESP partition: /dev/$ESP_ACTUAL_DEV (GPT type: EFI System Partition)"
 else
-    warn "Could not find CIDATA partition for GPT typecode change — bless may fail"
+    warn "Could not verify ESP partition in partition table"
 fi
 echo ""
 
@@ -668,11 +667,8 @@ log "Step 7: Setting boot device with bless (--nextonly for safety)..."
 
 # Use --nextonly so that if the installer fails, the next boot falls back to macOS.
 # Once Ubuntu is confirmed running, set permanent boot device from within Ubuntu.
-if [ "$ESPTYPE_FIXED" -eq 0 ]; then
-    warn "ESP GPT type is still Microsoft Basic Data (sgdisk failed) — bless may or may not work"
-fi
 bless --setBoot --mount "$ESP_MOUNT" --file "$ESP_MOUNT/EFI/boot/bootx64.efi" --nextonly || \
-    die "bless failed (exit $?) — EFI firmware cannot set boot device. GPT type may need to be C12A7328 (EFI System Partition)."
+    die "bless failed (exit $?) — EFI firmware cannot set boot device. ESP GPT type should be C12A7328 (EFI System Partition)."
 
 log "Verifying boot device..."
 bless --info "$ESP_MOUNT" 2>/dev/null || warn "Could not verify boot device with bless --info"
