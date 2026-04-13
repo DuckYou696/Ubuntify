@@ -13,8 +13,6 @@ _APFS_ORIGINAL_SIZE=""
 _APFS_RESIZED=0
 _ESP_DEVICE=""
 _ESP_CREATED=0
-_ISO_MOUNT=""
-_ISO_MOUNTED=0
 
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
@@ -32,12 +30,6 @@ revert_changes() {
     echo ""
     error "Reverting deployment changes..."
     local REVERT_ERRORS=0
-
-    if [ "$_ISO_MOUNTED" -eq 1 ] && [ -n "$_ISO_MOUNT" ] && [ -d "$_ISO_MOUNT" ]; then
-        log "Unmounting ISO..."
-        hdiutil detach "$_ISO_MOUNT" -quiet 2>/dev/null || warn "Could not unmount ISO at $_ISO_MOUNT"
-        _ISO_MOUNTED=0
-    fi
 
     # Find ESP by volume name — diskutil eraseVolume renumbers the slice
     if [ "$_ESP_CREATED" -eq 1 ]; then
@@ -144,6 +136,7 @@ fi
 # ── Preflight checks ──
 
 [ -f "$ISO_PATH" ] || die "ISO not found: $ISO_PATH (pass path as argument)"
+command -v xorriso >/dev/null 2>&1 || die "xorriso not found. Install with: brew install xorriso"
 command -v sgdisk >/dev/null 2>&1 || die "sgdisk not found. Install with: brew install gptfdisk"
 command -v comm >/dev/null 2>&1 || die "comm not found. Install with: brew install coreutils"
 command -v python3 >/dev/null 2>&1 || die "python3 not found. Install with: brew install python3"
@@ -315,19 +308,14 @@ ESP_MOUNT="/Volumes/$ESP_NAME"
 log "ESP mounted at: $ESP_MOUNT"
 echo ""
 
-# ── Step 5: Mount ISO and extract contents to ESP ──
+# ── Step 5: Extract ISO contents to ESP ──
 
 log "Step 5: Extracting ISO contents to ESP..."
 
-ISO_MOUNT="/tmp/ubuntu-iso-mount"
-mkdir -p "$ISO_MOUNT"
-hdiutil attach "$ISO_PATH" -mountpoint "$ISO_MOUNT" -readonly -quiet || die "Failed to mount ISO"
-_ISO_MOUNT="$ISO_MOUNT"
-_ISO_MOUNTED=1
-log "ISO mounted at: $ISO_MOUNT"
+command -v xorriso >/dev/null 2>&1 || die "xorriso not found. Install with: brew install xorriso"
 
 ESP_AVAIL=$(df -m "$ESP_MOUNT" | tail -1 | awk '{print $4}')
-ISO_TOTAL=$(du -sm "$ISO_MOUNT" 2>/dev/null | cut -f1 || echo "0")
+ISO_TOTAL=$(du -sm "$ISO_PATH" 2>/dev/null | cut -f1 || echo "0")
 if [ -n "$ESP_AVAIL" ] && [ "$ESP_AVAIL" -gt 0 ] && [ -n "$ISO_TOTAL" ] && [ "$ISO_TOTAL" -gt 0 ]; then
     REQUIRED_MIN=$((ISO_TOTAL + ISO_TOTAL / 10))
     if [ "$ESP_AVAIL" -lt "$REQUIRED_MIN" ]; then
@@ -336,18 +324,19 @@ if [ -n "$ESP_AVAIL" ] && [ "$ESP_AVAIL" -gt 0 ] && [ -n "$ISO_TOTAL" ] && [ "$I
     log "Space check: ${ESP_AVAIL}MB available, ${REQUIRED_MIN}MB needed (with 10% margin)"
 fi
 
-# Copy EFI boot files — CRITICAL: do not silently ignore failures
-log "Copying EFI boot structure..."
-mkdir -p "$ESP_MOUNT/EFI/boot"
-cp -r "$ISO_MOUNT/EFI/boot/"* "$ESP_MOUNT/EFI/boot/" || die "Failed to copy EFI boot files — cannot boot without them"
+# Extract ISO contents directly to ESP using xorriso -osirrox
+# (macOS hdiutil cannot mount xorriso-built ISOs with hybrid MBR+GPT+El Torito)
+log "Extracting ISO to ESP via xorriso (this may take a minute)..."
+xorriso -osirrox on -indev "$ISO_PATH" \
+    -extract / "$ESP_MOUNT" 2>/dev/null || \
+    die "Failed to extract ISO contents"
+_ISO_EXTRACTED=1
 
-# Verify the EFI bootloader exists immediately after copy
-[ -f "$ESP_MOUNT/EFI/boot/BOOTX64.EFI" ] || die "BOOTX64.EFI missing after copy — ISO may lack EFI support"
+rm -rf "$ESP_MOUNT/pool" "$ESP_MOUNT/dists" "$ESP_MOUNT/.disk" "$ESP_MOUNT/boot/grub" 2>/dev/null || true
 
-# Copy casper (kernel + initrd + filesystem)
-log "Copying casper directory (~2.5GB)..."
-mkdir -p "$ESP_MOUNT/casper"
-cp "$ISO_MOUNT/casper/"* "$ESP_MOUNT/casper/" || warn "Some casper files failed to copy (non-fatal if kernel+initrd present)"
+# Verify the EFI bootloader exists (bsdtar extracts lowercase on case-sensitive, FAT32 is case-insensitive)
+[ -f "$ESP_MOUNT/EFI/boot/bootx64.efi" ] || [ -f "$ESP_MOUNT/EFI/boot/BOOTX64.EFI" ] || die "BOOTX64.EFI missing after extraction — ISO may lack EFI support"
+
 # Verify kernel and initrd — these are strictly required
 [ -f "$ESP_MOUNT/casper/vmlinuz" ] || die "casper/vmlinuz missing — cannot boot"
 [ -f "$ESP_MOUNT/casper/initrd" ] || die "casper/initrd missing — cannot boot"
@@ -356,35 +345,21 @@ if ! ls "$ESP_MOUNT/casper/"*.squashfs 1>/dev/null 2>&1; then
     die "No .squashfs files in casper/ — root filesystem unavailable, installer will kernel panic"
 fi
 
-# Copy the autoinstall.yaml and macpro-pkgs
-log "Copying autoinstall configuration..."
-cp "$ISO_MOUNT/autoinstall.yaml" "$ESP_MOUNT/autoinstall.yaml" 2>/dev/null || \
-    cp "$SCRIPT_DIR/autoinstall.yaml" "$ESP_MOUNT/autoinstall.yaml" || \
-    die "Failed to copy autoinstall.yaml"
-[ -f "$ESP_MOUNT/autoinstall.yaml" ] || die "autoinstall.yaml missing after copy"
+if [ ! -f "$ESP_MOUNT/autoinstall.yaml" ]; then
+    cp "$SCRIPT_DIR/autoinstall.yaml" "$ESP_MOUNT/autoinstall.yaml" || die "Failed to copy autoinstall.yaml"
+fi
+[ -f "$ESP_MOUNT/autoinstall.yaml" ] || die "autoinstall.yaml missing after extraction"
 
-log "Copying driver compilation packages..."
-mkdir -p "$ESP_MOUNT/macpro-pkgs"
-cp "$ISO_MOUNT/macpro-pkgs/"*.deb "$ESP_MOUNT/macpro-pkgs/" 2>/dev/null || \
-    cp "$SCRIPT_DIR/packages/"*.deb "$ESP_MOUNT/macpro-pkgs/" 2>/dev/null || \
-    warn "Some driver packages may be missing"
-# Verify at least the critical driver package exists
 if ! ls "$ESP_MOUNT/macpro-pkgs/"broadcom-sta-dkms_*.deb 1>/dev/null 2>&1; then
-    warn "broadcom-sta-dkms .deb not found in macpro-pkgs/ — WiFi driver compilation will fail"
+    warn "broadcom-sta-dkms .deb not found in macpro-pkgs/ — trying local fallback"
+    mkdir -p "$ESP_MOUNT/macpro-pkgs"
+    cp "$SCRIPT_DIR/packages/"*.deb "$ESP_MOUNT/macpro-pkgs/" 2>/dev/null || warn "Some driver packages may be missing"
 fi
-# Copy DKMS patches (CRITICAL: subdirectory not matched by *.deb glob above)
-if [ -d "$ISO_MOUNT/macpro-pkgs/dkms-patches" ]; then
+
+if [ ! -d "$ESP_MOUNT/macpro-pkgs/dkms-patches" ] && [ -d "$SCRIPT_DIR/packages/dkms-patches" ]; then
     mkdir -p "$ESP_MOUNT/macpro-pkgs/dkms-patches"
-    cp "$ISO_MOUNT/macpro-pkgs/dkms-patches/"* "$ESP_MOUNT/macpro-pkgs/dkms-patches/" 2>/dev/null || \
-        warn "Some DKMS patches may be missing"
-elif [ -d "$SCRIPT_DIR/packages/dkms-patches" ]; then
-    mkdir -p "$ESP_MOUNT/macpro-pkgs/dkms-patches"
-    cp "$SCRIPT_DIR/packages/dkms-patches/"* "$ESP_MOUNT/macpro-pkgs/dkms-patches/" 2>/dev/null || \
-        warn "Some DKMS patches may be missing"
-else
-    die "No DKMS patches found — broadcom-sta will fail to compile on kernel 6.8+"
+    cp "$SCRIPT_DIR/packages/dkms-patches/"* "$ESP_MOUNT/macpro-pkgs/dkms-patches/" 2>/dev/null || warn "Some DKMS patches may be missing"
 fi
-# Verify critical patch files exist
 if [ -d "$ESP_MOUNT/macpro-pkgs/dkms-patches" ]; then
     if [ ! -f "$ESP_MOUNT/macpro-pkgs/dkms-patches/series" ]; then
         warn "dkms-patches/series file missing — patches will not be applied in order"
@@ -633,8 +608,6 @@ GRUBEOF
 mkdir -p "$ESP_MOUNT/boot/grub"
 cp "$ESP_MOUNT/EFI/boot/grub.cfg" "$ESP_MOUNT/boot/grub/grub.cfg"
 
-hdiutil detach "$ISO_MOUNT" -quiet 2>/dev/null || true
-_ISO_MOUNTED=0
 echo ""
 
 # ── Step 6: Verify ESP contents ──
