@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
 set -o pipefail
+set -u
 export PATH="/usr/local/bin:/usr/local/sbin:$PATH"
 
 readonly SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -43,13 +44,13 @@ revert_changes() {
     error "Reverting deployment changes..."
     local REVERT_ERRORS=0
 
-    if [ "$DEPLOY_METHOD" = "1" ]; then
+    if [ "${DEPLOY_METHOD:-}" = "1" ]; then
         # Internal partition method cleanup
-        if [ -z "$INTERNAL_DISK" ]; then
+        if [ -z "${INTERNAL_DISK:-}" ]; then
             INTERNAL_DISK=$(diskutil list | grep -E 'internal.*physical' | head -1 | grep -oE '/dev/disk[0-9]+' || true)
         fi
 
-        if [ "$_ESP_CREATED" -eq 1 ] && [ -n "$INTERNAL_DISK" ]; then
+        if [ "${_ESP_CREATED:-0}" -eq 1 ] && [ -n "${INTERNAL_DISK:-}" ]; then
             local ESP_REVERT_DEV
             ESP_REVERT_DEV=$(diskutil list "$INTERNAL_DISK" 2>/dev/null | grep "$ESP_NAME" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
             if [ -n "$ESP_REVERT_DEV" ]; then
@@ -63,7 +64,7 @@ revert_changes() {
             _ESP_CREATED=0
         fi
 
-        if [ "$_APFS_RESIZED" -eq 1 ] && [ -n "$APFS_CONTAINER" ] && [ -n "$_APFS_ORIGINAL_SIZE" ]; then
+        if [ "${_APFS_RESIZED:-0}" -eq 1 ] && [ -n "${APFS_CONTAINER:-}" ] && [ -n "${_APFS_ORIGINAL_SIZE:-}" ]; then
             log "Restoring APFS container to ${_APFS_ORIGINAL_SIZE}GB..."
             diskutil apfs resizeContainer "$APFS_CONTAINER" "${_APFS_ORIGINAL_SIZE}g" 2>/dev/null || {
                 warn "Could not restore APFS container size"
@@ -73,7 +74,7 @@ revert_changes() {
         fi
 
         local MACOS_VOLUME="/"
-        if [ -n "$APFS_CONTAINER" ]; then
+        if [ -n "${APFS_CONTAINER:-}" ]; then
             MACOS_VOLUME=$(diskutil info "$APFS_CONTAINER" 2>/dev/null | grep "Mount Point" | awk '{print $NF}' || echo "/")
         fi
         if [ -d "$MACOS_VOLUME" ] && [ "$MACOS_VOLUME" != "/" ]; then
@@ -89,11 +90,11 @@ revert_changes() {
                 REVERT_ERRORS=1
             }
         fi
-    elif [ "$DEPLOY_METHOD" = "2" ] && [ -n "$TARGET_DEVICE" ]; then
+    elif [ "${DEPLOY_METHOD:-}" = "2" ] && [ -n "${TARGET_DEVICE:-}" ]; then
         # USB method cleanup - unmount but don't erase USB
         log "Unmounting USB device $TARGET_DEVICE..."
         diskutil unmountDisk "$TARGET_DEVICE" 2>/dev/null || true
-    elif [ "$DEPLOY_METHOD" = "4" ]; then
+    elif [ "${DEPLOY_METHOD:-}" = "4" ]; then
         # VM test cleanup — just power off VM if running
         if command -v VBoxManage >/dev/null 2>&1; then
             VBoxManage controlvm macpro-vmtest poweroff 2>/dev/null || true
@@ -392,6 +393,9 @@ preflight_checks() {
 analyze_disk_layout() {
     log "Analyzing disk layout..."
 
+    local APFS_PARTITION
+    local FREE_SPACE
+
     INTERNAL_DISK=$(diskutil list | grep -E 'internal.*physical' | head -1 | grep -oE '/dev/disk[0-9]+' || true)
     [ -n "$INTERNAL_DISK" ] || die "Cannot identify internal disk"
 
@@ -400,7 +404,6 @@ analyze_disk_layout() {
     echo ""
 
     # Find APFS container
-    local APFS_PARTITION
     APFS_PARTITION=$(diskutil list "$INTERNAL_DISK" | grep -i "APFS" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
     if [ -n "$APFS_PARTITION" ]; then
         APFS_CONTAINER=$(diskutil info "$APFS_PARTITION" 2>/dev/null | grep -i "container" | grep -oE 'disk[0-9]+' | head -1 || true)
@@ -409,7 +412,6 @@ analyze_disk_layout() {
         APFS_CONTAINER=$(diskutil list | grep -i "APFS" | grep -oE 'disk[0-9]+' | head -1 || true)
     fi
     if [ -n "$APFS_CONTAINER" ]; then
-        local FREE_SPACE
         FREE_SPACE=$(diskutil apfs list 2>/dev/null | grep -A5 "Capacity" | grep "Available" | grep -oE '[0-9]+.*B' | head -1 || true)
         log "APFS partition: /dev/${APFS_PARTITION:-unknown}"
         log "APFS container: /dev/$APFS_CONTAINER"
@@ -419,7 +421,7 @@ analyze_disk_layout() {
 }
 
 shrink_apfs_if_needed() {
-    if [ "$STORAGE_LAYOUT" != "1" ]; then
+    if [ "${STORAGE_LAYOUT:-}" != "1" ]; then
         log "Full disk mode selected — skipping APFS resize"
         return 0
     fi
@@ -427,11 +429,21 @@ shrink_apfs_if_needed() {
     log "Checking APFS container size..."
 
     local CURRENT_SIZE
+    local APFS_PARTITION
+    local APFS_CONTAINER
+    local FREE_SPACE
+    local _APFS_ORIGINAL_SIZE
+    local EXISTING_FREE_GB
+    local USED_GB
+    local TARGET_MACOS_GB
+    local CURRENT_CONTAINER_GB
+    local SNAPSHOTS
+    local SNAP_UUID
+
     CURRENT_SIZE=$(diskutil info "$APFS_CONTAINER" 2>/dev/null | grep "Disk Size" | grep -oE '[0-9]+(\.[0-9]+)? GB' || true)
     _APFS_ORIGINAL_SIZE=$(echo "$CURRENT_SIZE" | grep -oE '[0-9]+(\.[0-9]+)?' || true)
     log "Current APFS size: ${CURRENT_SIZE:-unknown}"
 
-    local EXISTING_FREE_GB
     EXISTING_FREE_GB=$(diskutil list "$INTERNAL_DISK" 2>/dev/null | grep "(free" | grep -oE '[0-9]+(\.[0-9]+)? GB' | head -1 | grep -oE '[0-9]+(\.[0-9]+)?' || true)
     if [ -n "$EXISTING_FREE_GB" ] && echo "$EXISTING_FREE_GB" | awk '{exit !($1 >= 5)}'; then
         log "Free space already ${EXISTING_FREE_GB}GB — skipping APFS resize"
@@ -443,13 +455,11 @@ shrink_apfs_if_needed() {
     log "Purging purgeable APFS space..."
     tmutil thinlocalsnapshots / 999999999999 2>/dev/null || true
 
-    local USED_GB
     USED_GB=$(diskutil apfs list "$APFS_CONTAINER" 2>/dev/null | grep "Capacity In Use By Volumes" | grep -oE '[0-9]+(\.[0-9]+)? GB' | head -1 | grep -oE '[0-9]+(\.[0-9]+)?' || true)
     if [ -z "$USED_GB" ]; then
         USED_GB=$(diskutil apfs list "$APFS_CONTAINER" 2>/dev/null | grep "Capacity In Use By Volumes" | grep -oE '[0-9]+ B' | head -1 | awk '{printf "%.1f", $1/1024/1024/1024}' || true)
     fi
 
-    local TARGET_MACOS_GB
     if [ -n "$USED_GB" ]; then
         TARGET_MACOS_GB=$(echo "$USED_GB" | awk -v min="$MIN_MACOS_GB" -v margin=10 '{target=int($1)+margin+1; if(target<min) target=min; print target}')
         log "APFS in use: ${USED_GB}GB → shrinking to ${TARGET_MACOS_GB}GB (10GB margin)"
@@ -458,7 +468,6 @@ shrink_apfs_if_needed() {
         warn "Could not determine APFS usage — defaulting to ${TARGET_MACOS_GB}GB for macOS"
     fi
 
-    local CURRENT_CONTAINER_GB
     CURRENT_CONTAINER_GB=$(diskutil info "$APFS_CONTAINER" 2>/dev/null | grep "Disk Size" | grep -oE '[0-9]+(\.[0-9]+)?' | head -1 || true)
     if [ -n "$CURRENT_CONTAINER_GB" ] && echo "$CURRENT_CONTAINER_GB $TARGET_MACOS_GB" | awk '{exit !($1 <= $2)}'; then
         log "APFS already at ${CURRENT_CONTAINER_GB}GB — no resize needed"
@@ -467,14 +476,12 @@ shrink_apfs_if_needed() {
 
     # Delete snapshots first
     log "Checking APFS snapshots..."
-    local SNAPSHOTS
     SNAPSHOTS=$(diskutil apfs listSnapshots "$APFS_CONTAINER" 2>/dev/null | grep "Snapshot.*UUID" || true)
     if [ -n "$SNAPSHOTS" ]; then
         warn "APFS snapshots found — auto-deleting:"
         echo "$SNAPSHOTS"
 
         while IFS= read -r line; do
-            local SNAP_UUID
             SNAP_UUID=$(echo "$line" | grep -oE '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}' || true)
             if [ -n "$SNAP_UUID" ]; then
                 log "Deleting snapshot $SNAP_UUID..."
@@ -503,7 +510,7 @@ create_esp_partition() {
         sleep 1
     fi
 
-    local BEFORE_PARTS AFTER_PARTS ESP_DEVICE
+    local BEFORE_PARTS AFTER_PARTS ESP_DEVICE ESP_MOUNT
     BEFORE_PARTS=$(diskutil list "$INTERNAL_DISK" | grep -oE 'disk[0-9]+s[0-9]+' | sort)
     diskutil addPartition "$INTERNAL_DISK" %C12A7328-F81F-11D2-BA4B-00A0C93EC93B% %noformat% "$ESP_SIZE" || \
         die "Failed to create ESP partition with EFI System Partition type"
@@ -582,9 +589,9 @@ generate_autoinstall() {
     cp "$TEMPLATE_PATH" "$OUTPUT_PATH"
 
     # Modify based on selections
+    local FULL_DISK_STORAGE NETWORK_CONFIG SIMPLE_EARLY
     if [ "$STORAGE_TYPE" = "fulldisk" ]; then
         # Replace storage section with full-disk config
-        local FULL_DISK_STORAGE
         FULL_DISK_STORAGE='  storage:
     config:
     - type: disk
@@ -1102,6 +1109,17 @@ deploy_usb() {
 
     select_usb_device
 
+    if ! diskutil info "$TARGET_DEVICE" 2>/dev/null | grep -qi "removable\|external\|usb"; then
+        echo ""
+        warn "WARNING: $TARGET_DEVICE does not appear to be a USB/removable device!"
+        warn "Writing to an internal device could DESTROY all data on it."
+        echo ""
+        read -rp "Type 'I UNDERSTAND THE RISK' to continue, or anything else to cancel: " confirm_usb
+        if [ "$confirm_usb" != "I UNDERSTAND THE RISK" ]; then
+            die "Deployment cancelled — target device does not appear to be removable"
+        fi
+    fi
+
     log "Preparing USB device $TARGET_DEVICE..."
 
     # Unmount the device
@@ -1181,7 +1199,8 @@ deploy_vm_test() {
         die "VirtualBox not found. Install from https://www.virtualbox.org/ or: brew install --cask virtualbox"
     fi
 
-    local BASE_ISO=""
+    local BASE_ISO
+    BASE_ISO=""
     for loc in "$SCRIPT_DIR"/prereqs/ubuntu-24.04*.iso "$HOME"/Downloads/ubuntu-24.04*.iso; do
         if [ -f "$loc" ]; then
             BASE_ISO="$loc"
@@ -1270,6 +1289,17 @@ deploy_manual() {
     log "Using ISO: $ISO_PATH"
 
     select_usb_device
+
+    if ! diskutil info "$TARGET_DEVICE" 2>/dev/null | grep -qi "removable\|external\|usb"; then
+        echo ""
+        warn "WARNING: $TARGET_DEVICE does not appear to be a USB/removable device!"
+        warn "Writing to an internal device could DESTROY all data on it."
+        echo ""
+        read -rp "Type 'I UNDERSTAND THE RISK' to continue, or anything else to cancel: " confirm
+        if [ "$confirm" != "I UNDERSTAND THE RISK" ]; then
+            die "Deployment cancelled — target device does not appear to be removable"
+        fi
+    fi
 
     echo ""
     echo "WARNING: This will ERASE all data on $TARGET_DEVICE"
@@ -1432,23 +1462,23 @@ handle_revert_flag() {
     if [ "${1:-}" = "--revert" ]; then
         log "Manual revert requested..."
         INTERNAL_DISK=$(diskutil list | grep -E 'internal.*physical' | head -1 | grep -oE '/dev/disk[0-9]+' || true)
-        if [ -z "$INTERNAL_DISK" ]; then
+        if [ -z "${INTERNAL_DISK:-}" ]; then
             die "Cannot identify internal disk for revert"
         fi
 
         local APFS_PARTITION
         APFS_PARTITION=$(diskutil list "$INTERNAL_DISK" | grep -i "APFS" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
-        if [ -n "$APFS_PARTITION" ]; then
+        if [ -n "${APFS_PARTITION:-}" ]; then
             APFS_CONTAINER=$(diskutil info "$APFS_PARTITION" 2>/dev/null | grep -i "container" | grep -oE 'disk[0-9]+' | head -1 || true)
         fi
-        if [ -z "$APFS_CONTAINER" ]; then
+        if [ -z "${APFS_CONTAINER:-}" ]; then
             APFS_CONTAINER=$(diskutil list | grep -i "APFS" | grep -oE 'disk[0-9]+' | head -1 || true)
         fi
 
         # Find and remove the CIDATA ESP partition
         local ESP_CANDIDATE
         ESP_CANDIDATE=$(diskutil list "$INTERNAL_DISK" 2>/dev/null | grep "$ESP_NAME" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
-        if [ -n "$ESP_CANDIDATE" ]; then
+        if [ -n "${ESP_CANDIDATE:-}" ]; then
             log "Removing ESP partition /dev/$ESP_CANDIDATE..."
             diskutil unmount "/dev/$ESP_CANDIDATE" 2>/dev/null || true
             diskutil eraseVolume free none "/dev/$ESP_CANDIDATE" 2>/dev/null || warn "Could not remove /dev/$ESP_CANDIDATE"
@@ -1458,7 +1488,7 @@ handle_revert_flag() {
 
         # Restore macOS boot device
         local MACOS_VOLUME
-        MACOS_VOLUME=$(diskutil info "$APFS_CONTAINER" 2>/dev/null | grep "Mount Point" | awk '{print $NF}' || echo "/")
+        MACOS_VOLUME=$(diskutil info "${APFS_CONTAINER:-}" 2>/dev/null | grep "Mount Point" | awk '{print $NF}' || echo "/")
         if [ -d "$MACOS_VOLUME" ] && [ "$MACOS_VOLUME" != "/" ]; then
             bless --mount "$MACOS_VOLUME" --setBoot 2>/dev/null && log "macOS boot device restored" || warn "Could not restore macOS boot device"
         else
