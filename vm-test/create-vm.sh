@@ -1,15 +1,16 @@
 #!/bin/bash
 set -e
+set -o pipefail
+set -u
 
 readonly SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+readonly PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+readonly LIB_DIR="${PROJECT_DIR}/lib"
 readonly ISO="${SCRIPT_DIR}/ubuntu-vmtest.iso"
 readonly VM_NAME="macpro-vmtest"
 readonly DISK_SIZE=25600
 
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly NC='\033[0m'
+source "$LIB_DIR/colors.sh"
 
 FORCE=false
 if [ "$1" = "--force" ]; then
@@ -61,7 +62,7 @@ if VBoxManage list vms 2>/dev/null | grep -q "\"$VM_NAME\""; then
     fi
 fi
 
-DISK_PATH="/Users/djtchill/VirtualBox VMs/$VM_NAME/$VM_NAME.vdi"
+DISK_PATH="$(VBoxManage list systemproperties | grep -m1 'Default machine folder' | sed 's/Default machine folder:[[:space:]]*//')/$VM_NAME/$VM_NAME.vdi"
 
 echo "Creating VM: $VM_NAME"
 echo "  EFI firmware (matches Mac Pro 2013)"

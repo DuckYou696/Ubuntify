@@ -1,11 +1,14 @@
 #!/bin/bash
 set -e
+set -o pipefail
+set -u
 
+readonly SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+readonly PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+readonly LIB_DIR="${PROJECT_DIR}/lib"
 readonly VM_NAME="macpro-vmtest"
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly NC='\033[0m'
+
+source "$LIB_DIR/colors.sh"
 
 echo "========================================="
 echo " Mac Pro VM Test Runner"
@@ -192,7 +195,7 @@ case "${1:-run}" in
         ;;
 
     monitor)
-        MONITOR_DIR="/Users/djtchill/Desktop/Mac/macpro-monitor"
+        MONITOR_DIR="$(cd "$(dirname "$0")" && pwd)/../macpro-monitor"
         if [ -f "$MONITOR_DIR/server.js" ]; then
             echo "Starting installation monitor on port 8081..."
             PORT=8081 nohup node "$MONITOR_DIR/server.js" > /tmp/vm-monitor.log 2>&1 &

@@ -7,6 +7,7 @@ const HOST = '0.0.0.0';
 const MAX_BODY_SIZE = 256 * 1024;
 const RATE_LIMIT_WINDOW_MS = 1000;
 const RATE_LIMIT_MAX_REQUESTS = 10;
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS || '';
 
 const MAX_UPDATES = 200;
 const MAX_BUILT_IN_EVENTS = 500;
@@ -502,7 +503,9 @@ function sanitizeProgress(val) {
 }
 
 const server = http.createServer((req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const origin = req.headers.origin || '';
+    const allowOrigin = ALLOWED_ORIGINS || (origin ? origin : '*');
+    res.setHeader('Access-Control-Allow-Origin', allowOrigin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     
@@ -534,8 +537,12 @@ const server = http.createServer((req, res) => {
         let body = '';
         let tooLarge = false;
         req.on('data', chunk => {
+            if (tooLarge) return;
             if (body.length + chunk.length > MAX_BODY_SIZE) {
                 tooLarge = true;
+                res.writeHead(413, {'Content-Type': 'application/json'});
+                res.end(JSON.stringify({error: 'Payload too large'}));
+                req.destroy();
                 return;
             }
             body += chunk;
@@ -594,6 +601,22 @@ process.on('uncaughtException', (err) => {
     save();
     process.exit(1);
 });
+
+function gracefulShutdown(signal) {
+    console.log(`\n[${signal}] Shutting down gracefully...`);
+    save();
+    server.close(() => {
+        console.log('Server closed.');
+        process.exit(0);
+    });
+    setTimeout(() => {
+        console.error('[FORCE] Forced exit after 5s');
+        process.exit(1);
+    }, 5000);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 setInterval(() => {
     checkStalled();
