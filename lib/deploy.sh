@@ -26,10 +26,10 @@ TARGET_DEVICE="${TARGET_DEVICE:-}"
 preflight_checks() {
     log "Running preflight checks..."
 
-    command -v xorriso >/dev/null 2>1 || die "xorriso not found. Install with: brew install xorriso"
-    command -v sgdisk >/dev/null 2>1 || die "sgdisk not found. Install with: brew install gptfdisk"
-    command -v comm >/dev/null 2>1 || die "comm not found. Install with: brew install coreutils"
-    command -v python3 >/dev/null 2>1 || die "python3 not found. Install with: brew install python3"
+    command -v xorriso >/dev/null 2>&1 || die "xorriso not found. Install with: brew install xorriso"
+    command -v sgdisk >/dev/null 2>&1 || die "sgdisk not found. Install with: brew install gptfdisk"
+    command -v comm >/dev/null 2>&1 || die "comm not found. Install with: brew install coreutils"
+    command -v python3 >/dev/null 2>&1 || die "python3 not found. Install with: brew install python3"
 
     log "Running on: $(sw_vers -productName) $(sw_vers -productVersion)"
 
@@ -85,7 +85,7 @@ deploy_internal_partition() {
     extract_iso_to_esp "$ISO_PATH" "$ESP_MOUNT"
 
     # Copy driver packages if not present
-    if ! ls "$ESP_MOUNT/macpro-pkgs/"*.deb 1>/dev/null 2>1; then
+    if ! ls "$ESP_MOUNT/macpro-pkgs/"*.deb 1>/dev/null 2>&1; then
         log "Copying driver packages to ESP..."
         mkdir -p "$ESP_MOUNT/macpro-pkgs"
         cp "$SCRIPT_DIR/packages/"*.deb "$ESP_MOUNT/macpro-pkgs/" 2>/dev/null || warn "Some packages may be missing"
@@ -201,7 +201,7 @@ deploy_usb() {
     extract_iso_to_esp "$ISO_PATH" "$USB_MOUNT"
 
     # Copy driver packages
-    if ! ls "$USB_MOUNT/macpro-pkgs/"*.deb 1>/dev/null 2>1; then
+    if ! ls "$USB_MOUNT/macpro-pkgs/"*.deb 1>/dev/null 2>&1; then
         log "Copying driver packages to USB..."
         mkdir -p "$USB_MOUNT/macpro-pkgs"
         cp "$SCRIPT_DIR/packages/"*.deb "$USB_MOUNT/macpro-pkgs/" 2>/dev/null || warn "Some packages may be missing"
@@ -258,7 +258,7 @@ deploy_vm_test() {
         return 0
     fi
 
-    if ! command -v VBoxManage >/dev/null 2>1; then
+    if ! command -v VBoxManage >/dev/null 2>&1; then
         die "VirtualBox not found. Install from https://www.virtualbox.org/ or: brew install --cask virtualbox"
     fi
 
@@ -303,7 +303,7 @@ deploy_vm_test() {
         "$VM_DIR/create-vm.sh" || die "VM creation failed"
     fi
 
-    if ! lsof -i :8080 >/dev/null 2>1; then
+    if ! lsof -i :8080 >/dev/null 2>&1; then
         log "Starting monitoring server..."
         (cd "$SCRIPT_DIR/macpro-monitor" && ./start.sh) || warn "Monitor start failed (non-critical)"
         sleep 2

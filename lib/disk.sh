@@ -214,7 +214,7 @@ extract_iso_to_esp() {
     [ -f "$ESP_MOUNT/EFI/boot/bootx64.efi" ] || [ -f "$ESP_MOUNT/EFI/boot/BOOTX64.EFI" ] || die "BOOTX64.EFI missing"
     [ -f "$ESP_MOUNT/casper/vmlinuz" ] || die "casper/vmlinuz missing"
     [ -f "$ESP_MOUNT/casper/initrd" ] || die "casper/initrd missing"
-    if ! ls "$ESP_MOUNT/casper/"*.squashfs 1>/dev/null 2>1; then
+    if ! ls "$ESP_MOUNT/casper/"*.squashfs 1>/dev/null 2>&1; then
         die "No .squashfs files in casper/"
     fi
 

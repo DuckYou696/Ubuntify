@@ -38,7 +38,7 @@ verify_esp_contents() {
         fi
     done
 
-    if ls "$ESP_MOUNT/macpro-pkgs/"broadcom-sta-dkms_*.deb 1>/dev/null 2>1; then
+    if ls "$ESP_MOUNT/macpro-pkgs/"broadcom-sta-dkms_*.deb 1>/dev/null 2>&1; then
         log "  ✓ macpro-pkgs/broadcom-sta-dkms_*.deb"
     else
         warn "  ✗ macpro-pkgs/broadcom-sta-dkms (not found)"
@@ -68,7 +68,7 @@ attempt_bless() {
     local BLESS_OK=0
 
     # Method 1: systemsetup
-    if command -v systemsetup >/dev/null 2>1; then
+    if command -v systemsetup >/dev/null 2>&1; then
         log "Attempting systemsetup..."
         local SYSTEMSETUP_OUT
         SYSTEMSETUP_OUT=$(systemsetup -setstartupdisk "$ESP_MOUNT" 2>&1) || true

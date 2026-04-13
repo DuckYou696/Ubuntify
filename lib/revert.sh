@@ -78,7 +78,7 @@ revert_changes() {
         diskutil unmountDisk "$TARGET_DEVICE" 2>/dev/null || true
     elif [ "${DEPLOY_METHOD:-}" = "4" ]; then
         # VM test cleanup — just power off VM if running
-        if command -v VBoxManage >/dev/null 2>1; then
+        if command -v VBoxManage >/dev/null 2>&1; then
             VBoxManage controlvm macpro-vmtest poweroff 2>/dev/null || true
         fi
     fi
