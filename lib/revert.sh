@@ -14,6 +14,14 @@ source "${LIB_DIR:-./lib}/utils.sh"
 ESP_NAME="${ESP_NAME:-CIDATA}"
 
 revert_changes() {
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        log "[DRY RUN] Would revert changes:"
+        log "[DRY RUN]   - Remove ESP partition if created"
+        log "[DRY RUN]   - Restore APFS container size if resized"
+        log "[DRY RUN]   - Restore macOS boot device"
+        return 0
+    fi
+
     echo ""
     error "Reverting deployment changes..."
     local REVERT_ERRORS=0

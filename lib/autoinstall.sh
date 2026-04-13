@@ -196,6 +196,13 @@ with open('$OUTPUT_PATH', 'w') as f:
     fi
 
     log "Autoinstall configuration generated: $OUTPUT_PATH"
+
+    if [ -n "${WIFI_SSID:-}" ] && [ -n "${WIFI_PASSWORD:-}" ]; then
+        sed -i "s/__WIFI_SSID__/${WIFI_SSID}/g" "$OUTPUT_PATH" 2>/dev/null || \
+            sed -i '' "s/__WIFI_SSID__/${WIFI_SSID}/g" "$OUTPUT_PATH"
+        sed -i "s/__WIFI_PASSWORD__/${WIFI_PASSWORD}/g" "$OUTPUT_PATH" 2>/dev/null || \
+            sed -i '' "s/__WIFI_PASSWORD__/${WIFI_PASSWORD}/g" "$OUTPUT_PATH"
+    fi
 }
 
 generate_dualboot_storage() {

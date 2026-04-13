@@ -480,7 +480,7 @@ autoinstall:
         sleep 1
       done
       if [ -n "$_wifi_iface" ]; then
-        { printf "network:\n"; printf "  version: 2\n"; printf "  renderer: networkd\n"; printf "  wifis:\n"; printf "    %s:\n" "$_wifi_iface"; printf "      dhcp4: true\n"; printf "      optional: true\n"; printf "      access-points:\n"; printf "        ATTj6pXatS:\n"; printf "          password: j75b39=z?mpg\n"; } > /target/etc/netplan/02-wifi.yaml
+        { printf "network:\n"; printf "  version: 2\n"; printf "  renderer: networkd\n"; printf "  wifis:\n"; printf "    %s:\n" "$_wifi_iface"; printf "      dhcp4: true\n"; printf "      optional: true\n"; printf "      access-points:\n"; printf "        __WIFI_SSID__:\n"; printf "          password: __WIFI_PASSWORD__\n"; } > /target/etc/netplan/02-wifi.yaml
         chmod 600 /target/etc/netplan/02-wifi.yaml
         log "WiFi netplan written for interface: $_wifi_iface"
       else

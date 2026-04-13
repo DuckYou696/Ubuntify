@@ -51,6 +51,18 @@ preflight_checks() {
 deploy_internal_partition() {
     log "Starting internal partition deployment..."
 
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        log "[DRY RUN] Would deploy to internal partition"
+        log "[DRY RUN]   - Analyze disk layout"
+        log "[DRY RUN]   - Shrink APFS if needed (dual-boot)"
+        log "[DRY RUN]   - Create ESP partition"
+        log "[DRY RUN]   - Extract ISO contents"
+        log "[DRY RUN]   - Copy driver packages"
+        log "[DRY RUN]   - Generate autoinstall config"
+        log "[DRY RUN]   - Attempt bless"
+        return 0
+    fi
+
     local _ESP_CREATED=0
     local _APFS_RESIZED=0
     local _APFS_ORIGINAL_SIZE=""
@@ -133,6 +145,16 @@ deploy_internal_partition() {
 
 deploy_usb() {
     log "Starting USB deployment..."
+
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        log "[DRY RUN] Would deploy to USB drive"
+        log "[DRY RUN]   - Detect USB device"
+        log "[DRY RUN]   - Partition USB with FAT32"
+        log "[DRY RUN]   - Extract ISO contents"
+        log "[DRY RUN]   - Copy driver packages"
+        log "[DRY RUN]   - Generate autoinstall config"
+        return 0
+    fi
 
     local ISO_PATH
     ISO_PATH=$(detect_iso)
@@ -226,6 +248,16 @@ deploy_usb() {
 deploy_vm_test() {
     log "Starting VM test deployment..."
 
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        log "[DRY RUN] Would deploy VM test environment"
+        log "[DRY RUN]   - Check VirtualBox availability"
+        log "[DRY RUN]   - Find base Ubuntu ISO"
+        log "[DRY RUN]   - Build VM ISO if needed"
+        log "[DRY RUN]   - Create or recreate VM"
+        log "[DRY RUN]   - Start monitoring server"
+        return 0
+    fi
+
     if ! command -v VBoxManage >/dev/null 2>1; then
         die "VirtualBox not found. Install from https://www.virtualbox.org/ or: brew install --cask virtualbox"
     fi
@@ -292,6 +324,13 @@ deploy_vm_test() {
 
 deploy_manual() {
     log "Starting full manual USB deployment..."
+
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        log "[DRY RUN] Would deploy manual USB"
+        log "[DRY RUN]   - Select USB device"
+        log "[DRY RUN]   - Write ISO directly to USB with dd"
+        return 0
+    fi
 
     show_header
     echo "Full Manual Mode"

@@ -54,6 +54,11 @@ shrink_apfs_if_needed() {
     local -n _APFS_RESIZED=$3
     local -n _APFS_ORIGINAL_SIZE=$4
 
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        log "[DRY RUN] Would shrink APFS container if needed"
+        return 0
+    fi
+
     if [ "${STORAGE_LAYOUT:-}" != "1" ]; then
         log "Full disk mode selected — skipping APFS resize"
         return 0
@@ -130,6 +135,11 @@ create_esp_partition() {
     local -n _ESP_CREATED=$2
     local -n _ESP_DEVICE=$3
 
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        log "[DRY RUN] Would create ESP partition on $INTERNAL_DISK"
+        return 0
+    fi
+
     log "Creating ESP partition for Ubuntu installer..."
 
     # Remove leftover CIDATA ESP from a previous failed run
@@ -172,6 +182,13 @@ create_esp_partition() {
 extract_iso_to_esp() {
     local ISO_PATH="$1"
     local ESP_MOUNT="$2"
+
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        log "[DRY RUN] Would extract ISO to ESP"
+        log "[DRY RUN]   ISO: $ISO_PATH"
+        log "[DRY RUN]   ESP: $ESP_MOUNT"
+        return 0
+    fi
 
     log "Extracting ISO contents to ESP..."
 

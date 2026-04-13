@@ -16,7 +16,14 @@ log()   { echo -e "${GREEN}[deploy]${NC} $1" | tee -a "$LOG_FILE"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $1" | tee -a "$LOG_FILE"; }
 error() { echo -e "${RED}[ERROR]${NC} $1" | tee -a "$LOG_FILE"; }
 info()  { echo -e "${BLUE}[INFO]${NC} $1" | tee -a "$LOG_FILE"; }
-die()   { error "$1"; exit 1; }
+die()   {
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        error "[DRY RUN] Would exit with error: $1"
+        return 0
+    fi
+    error "$1"
+    exit 1
+}
 vlog()  { echo -e "${GREEN}[deploy]${NC} $1" >> "$LOG_FILE"; }
 
 show_header() {

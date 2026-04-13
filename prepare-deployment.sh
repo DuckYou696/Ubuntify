@@ -4,6 +4,39 @@ set -o pipefail
 set -u
 export PATH="/usr/local/bin:/usr/local/sbin:$PATH"
 
+# CLI flags
+DRY_RUN=0
+VERBOSE=0
+
+show_help() {
+    echo "Usage: sudo ./prepare-deployment.sh [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --dry-run    Show what would be done without making changes"
+    echo "  --verbose    Enable verbose logging (set -x)"
+    echo "  --revert     Revert previous deployment changes"
+    echo "  --help       Show this help message"
+    echo ""
+    echo "Deployment methods (interactive menu):"
+    echo "  1) Internal ESP partition  2) USB drive"
+    echo "  3) Full manual            4) VM test (VirtualBox)"
+    exit 0
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run)   DRY_RUN=1; shift ;;
+        --verbose)   VERBOSE=1; shift ;;
+        --revert)    handle_revert_flag; exit $? ;;
+        --help|-h)   show_help ;;
+        *)           echo "Unknown option: $1"; show_help ;;
+    esac
+done
+
+if [ "$VERBOSE" -eq 1 ]; then
+    set -x
+fi
+
 readonly SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 readonly ESP_NAME="CIDATA"
 readonly ESP_SIZE="5g"
@@ -21,6 +54,20 @@ source "$LIB_DIR/autoinstall.sh"
 source "$LIB_DIR/bless.sh"
 source "$LIB_DIR/deploy.sh"
 source "$LIB_DIR/revert.sh"
+
+export DRY_RUN
+
+CONF_FILE="${SCRIPT_DIR}/deploy.conf"
+if [ ! -f "$CONF_FILE" ]; then
+    warn "deploy.conf not found — using defaults from deploy.conf.example"
+    CONF_FILE="${SCRIPT_DIR}/deploy.conf.example"
+fi
+source "$CONF_FILE" || die "Failed to load $CONF_FILE"
+
+export WIFI_SSID
+export WIFI_PASSWORD
+export WEBHOOK_HOST
+export WEBHOOK_PORT
 
 # Global state for cleanup (exported so lib modules can access)
 export INTERNAL_DISK=""
