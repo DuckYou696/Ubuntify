@@ -9,7 +9,7 @@
 #
 
 source "${LIB_DIR:-./lib}/colors.sh"
-source "${LIB_DIR:-./lib}/utils.sh"
+source "${LIB_DIR:-./lib}/logging.sh"
 
 ESP_NAME="${ESP_NAME:-CIDATA}"
 ESP_SIZE="${ESP_SIZE:-5g}"

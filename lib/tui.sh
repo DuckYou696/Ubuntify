@@ -67,7 +67,7 @@ tui_menu() {
     width=$(echo "$size" | cut -d' ' -f2)
     local tmpfile
     tmpfile=$(_tui_mktemp)
-    trap "_tui_cleanup '$tmpfile'" EXIT
+    trap "_tui_cleanup \"$tmpfile\"" EXIT
 
     if [ "$TUI_BACKEND" = "dialog" ]; then
         local items=()
@@ -212,7 +212,7 @@ tui_input() {
     width=$(echo "$size" | cut -d' ' -f2)
     local tmpfile
     tmpfile=$(_tui_mktemp)
-    trap "_tui_cleanup '$tmpfile'" EXIT
+    trap "_tui_cleanup \"$tmpfile\"" EXIT
 
     if [ "$TUI_BACKEND" = "dialog" ]; then
         if dialog --colors --backtitle "$TUI_BACKTITLE" --title "$title" --inputbox "\Z3$label\Zn" "$height" "$width" "$default_value" 2>"$tmpfile"; then
@@ -263,7 +263,7 @@ tui_password() {
     width=$(echo "$size" | cut -d' ' -f2)
     local tmpfile
     tmpfile=$(_tui_mktemp)
-    trap "_tui_cleanup '$tmpfile'" EXIT
+    trap "_tui_cleanup \"$tmpfile\"" EXIT
 
     if [ "$TUI_BACKEND" = "dialog" ]; then
         if dialog --colors --backtitle "$TUI_BACKTITLE" --title "$title" --passwordbox "\Z3$label\Zn" "$height" "$width" 2>"$tmpfile"; then
@@ -363,7 +363,7 @@ tui_checklist() {
     width=$(echo "$size" | cut -d' ' -f2)
     local tmpfile
     tmpfile=$(_tui_mktemp)
-    trap "_tui_cleanup '$tmpfile'" EXIT
+    trap "_tui_cleanup \"$tmpfile\"" EXIT
 
     if [ "$TUI_BACKEND" = "dialog" ]; then
         local items=()

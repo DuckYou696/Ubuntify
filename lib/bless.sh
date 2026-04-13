@@ -9,7 +9,7 @@
 #
 
 source "${LIB_DIR:-./lib}/colors.sh"
-source "${LIB_DIR:-./lib}/utils.sh"
+source "${LIB_DIR:-./lib}/logging.sh"
 
 ESP_NAME="${ESP_NAME:-CIDATA}"
 
@@ -70,9 +70,7 @@ attempt_bless() {
     # Method 1: systemsetup
     if command -v systemsetup >/dev/null 2>&1; then
         log "Attempting systemsetup..."
-        local SYSTEMSETUP_OUT
-        SYSTEMSETUP_OUT=$(systemsetup -setstartupdisk "$ESP_MOUNT" 2>&1) || true
-        if ! echo "$SYSTEMSETUP_OUT" | grep -qi "not allowed\|error\|failed"; then
+        if systemsetup -setstartupdisk "$ESP_MOUNT" 2>/dev/null; then
             log "systemsetup succeeded"
             BLESS_OK=1
         fi
@@ -81,20 +79,21 @@ attempt_bless() {
     # Method 2: bless --nextonly
     if [ "$BLESS_OK" -eq 0 ]; then
         log "Attempting bless --nextonly..."
-        local BLESS_OUT
-        BLESS_OUT=$(bless --verbose --setBoot --mount "$ESP_MOUNT" --file "$ESP_MOUNT/EFI/boot/bootx64.efi" --nextonly 2>&1) || true
-        if ! echo "$BLESS_OUT" | grep -qi "error\|failed\|0xe0"; then
+        if bless --verbose --setBoot --mount "$ESP_MOUNT" --file "$ESP_MOUNT/EFI/boot/bootx64.efi" --nextonly 2>/dev/null; then
             BLESS_OK=1
+        else
+            # SIP blocks NVRAM writes (0xe00002e2) — expected with SIP enabled
+            log "bless --nextonly failed (SIP may block NVRAM writes)"
         fi
     fi
 
     # Method 3: bless --device
     if [ "$BLESS_OK" -eq 0 ]; then
         log "Attempting bless --device..."
-        local BLESS_OUT
-        BLESS_OUT=$(bless --verbose --device "/dev/$ESP_DEVICE" --setBoot --nextonly 2>&1) || true
-        if ! echo "$BLESS_OUT" | grep -qi "error\|failed\|0xe0"; then
+        if bless --verbose --device "/dev/$ESP_DEVICE" --setBoot --nextonly 2>/dev/null; then
             BLESS_OK=1
+        else
+            log "bless --device also failed"
         fi
     fi
 

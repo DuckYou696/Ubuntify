@@ -10,7 +10,7 @@
 #
 
 source "${LIB_DIR:-./lib}/colors.sh"
-source "${LIB_DIR:-./lib}/utils.sh"
+source "${LIB_DIR:-./lib}/logging.sh"
 source "${LIB_DIR:-./lib}/detect.sh"
 source "${LIB_DIR:-./lib}/disk.sh"
 source "${LIB_DIR:-./lib}/autoinstall.sh"
@@ -63,10 +63,10 @@ deploy_internal_partition() {
         return 0
     fi
 
-    local _ESP_CREATED=0
-    local _APFS_RESIZED=0
-    local _APFS_ORIGINAL_SIZE=""
-    local _ESP_DEVICE=""
+    _ESP_CREATED=0
+    _APFS_RESIZED=0
+    _APFS_ORIGINAL_SIZE=""
+    _ESP_DEVICE=""
 
     local ISO_PATH
     ISO_PATH=$(detect_iso)
@@ -156,6 +156,10 @@ deploy_usb() {
         return 0
     fi
 
+    if [ -z "${INTERNAL_DISK:-}" ]; then
+        analyze_disk_layout INTERNAL_DISK APFS_CONTAINER
+    fi
+
     local ISO_PATH
     ISO_PATH=$(detect_iso)
     log "Using ISO: $ISO_PATH"
@@ -224,11 +228,7 @@ deploy_usb() {
     mkdir -p "$USB_MOUNT/cidata"
 
     if [ "$STORAGE_LAYOUT" = "1" ]; then
-        # For USB, we can't easily run Python against the Mac's disk from the USB
-        # So we'll use the static autoinstall.yaml and note that user may need to
-        # manually preserve partitions or use the full-disk option
-        log "Note: For dual-boot from USB, ensure you have free space on the target disk"
-        cp "$USB_MOUNT/autoinstall.yaml" "$USB_MOUNT/cidata/user-data"
+        generate_dualboot_storage "$USB_MOUNT/autoinstall.yaml" "$USB_MOUNT/cidata/user-data" "$INTERNAL_DISK"
     else
         cp "$USB_MOUNT/autoinstall.yaml" "$USB_MOUNT/cidata/user-data"
     fi

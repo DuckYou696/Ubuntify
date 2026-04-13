@@ -9,7 +9,7 @@
 #
 
 source "${LIB_DIR:-./lib}/colors.sh"
-source "${LIB_DIR:-./lib}/utils.sh"
+source "${LIB_DIR:-./lib}/logging.sh"
 
 SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "$0")" && pwd)}"
 
@@ -91,7 +91,13 @@ select_usb_device() {
 
     while true; do
         read -rp "Select USB device [1-$i]: " choice
-        if [ "$choice" -ge 1 ] && [ "$choice" -le "$i" ] 2>/dev/null; then
+        case "$choice" in
+            ''|*[!0-9]*)
+                echo "Invalid choice. Please enter a number."
+                continue
+                ;;
+        esac
+        if [ "$choice" -ge 1 ] && [ "$choice" -le "$i" ]; then
             _TARGET_DEVICE="${device_list[$((choice-1))]}"
             break
         fi

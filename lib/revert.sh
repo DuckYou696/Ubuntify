@@ -9,7 +9,7 @@
 #
 
 source "${LIB_DIR:-./lib}/colors.sh"
-source "${LIB_DIR:-./lib}/utils.sh"
+source "${LIB_DIR:-./lib}/logging.sh"
 
 ESP_NAME="${ESP_NAME:-CIDATA}"
 
@@ -83,7 +83,7 @@ revert_changes() {
         fi
     fi
 
-    if [ "$REVERT_ERRORS" -eq 0 ]; then
+    if [ "${REVERT_ERRORS:-0}" -eq 0 ]; then
         log "Revert complete"
     else
         error "Revert incomplete — some changes may require manual cleanup"
@@ -136,6 +136,16 @@ handle_revert_flag() {
             bless --mount "$MACOS_VOLUME" --setBoot 2>/dev/null && log "macOS boot device restored" || warn "Could not restore macOS boot device"
         else
             bless --mount / --setBoot 2>/dev/null && log "macOS boot device restored" || warn "Could not restore macOS boot device"
+        fi
+
+        # Restore APFS container to fill freed space
+        if [ -n "${APFS_CONTAINER:-}" ]; then
+            local CURRENT_APFS_GB
+            CURRENT_APFS_GB=$(diskutil info "$APFS_CONTAINER" 2>/dev/null | grep "Disk Size" | grep -oE '[0-9]+(\.[0-9]+)?' | head -1 || true)
+            log "Current APFS container: ${CURRENT_APFS_GB:-unknown}GB — expanding to fill free space..."
+            diskutil apfs resizeContainer "$APFS_CONTAINER" 0 2>/dev/null && \
+                log "APFS container expanded to fill freed space" || \
+                warn "Could not expand APFS container (space may need manual recovery)"
         fi
 
         log "Revert complete"

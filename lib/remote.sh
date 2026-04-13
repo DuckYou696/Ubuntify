@@ -250,7 +250,7 @@ remote_driver_status() {
 
     wl_loaded=$(remote__exec "$host" "lsmod | grep -q wl && echo 'loaded' || echo 'NOT loaded'")
     dkms_status=$(remote__exec "$host" "dkms status broadcom-sta 2>/dev/null || echo 'Not installed'")
-    wifi_iface=$(remote__exec "$host" "ip link show | grep -E 'wlan|wlp' | head -1 | awk -F: '{print \$2}' | tr -d ' '") || wifi_iface=""
+    wifi_iface=$(remote__exec "$host" "ip -br link show | grep -E 'wl' | head -1 | awk '{print \$1}'") || wifi_iface=""
 
     echo "=== Driver Status ==="
     echo "  wl module: $wl_loaded"

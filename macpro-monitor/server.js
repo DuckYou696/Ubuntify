@@ -88,6 +88,9 @@ function load() {
             if (data.builtInEvents && data.builtInEvents.length > MAX_BUILT_IN_EVENTS) {
                 data.builtInEvents = data.builtInEvents.slice(-MAX_BUILT_IN_EVENTS);
             }
+            data.stalled = false;
+            data.stalledSince = null;
+            data.lastUpdate = Date.now();
         }
     } catch (e) {
         console.log('No previous progress data found');

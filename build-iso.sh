@@ -24,6 +24,8 @@ cleanup() {
         echo ""
         warn "Build failed (exit $exit_code). Staging dir preserved for debugging: $STAGING"
         warn "Remove manually: rm -rf $STAGING"
+    elif [ -d "$STAGING" ]; then
+        rm -rf "$STAGING" 2>/dev/null || true
     fi
 }
 trap cleanup EXIT
