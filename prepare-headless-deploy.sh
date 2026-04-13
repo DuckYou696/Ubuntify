@@ -676,22 +676,37 @@ BLESS_OK=0
 # This may bypass the NVRAM protection that blocks bless.
 if command -v systemsetup >/dev/null 2>&1; then
     log "Attempting systemsetup -setstartupdisk (uses DiskManagement framework)..."
-    systemsetup -setstartupdisk "$ESP_MOUNT" 2>&1 | tee -a "$LOG_FILE" && BLESS_OK=1 || \
-        warn "systemsetup failed (may need Server Admin tools or different path format)"
+    SYSTEMSETUP_OUT=$(systemsetup -setstartupdisk "$ESP_MOUNT" 2>&1) || true
+    echo "$SYSTEMSETUP_OUT" | tee -a "$LOG_FILE"
+    if echo "$SYSTEMSETUP_OUT" | grep -qi "not allowed\|error\|failed\|cannot"; then
+        warn "systemsetup failed (SIP blocks startup disk changes)"
+    else
+        log "systemsetup succeeded"
+        BLESS_OK=1
+    fi
 fi
 
 # Method 1: bless --mount --file with --nextonly
 if [ "$BLESS_OK" -eq 0 ]; then
-    log "Attempting bless --nextonly (reverts to macOS on next-next boot)..."
-    bless --verbose --setBoot --mount "$ESP_MOUNT" --file "$ESP_MOUNT/EFI/boot/bootx64.efi" --nextonly 2>&1 | tee -a "$LOG_FILE" && BLESS_OK=1
+    log "Attempting bless --nextonly..."
+    BLESS_OUT=$(bless --verbose --setBoot --mount "$ESP_MOUNT" --file "$ESP_MOUNT/EFI/boot/bootx64.efi" --nextonly 2>&1) || true
+    echo "$BLESS_OUT" | tee -a "$LOG_FILE"
+    if echo "$BLESS_OUT" | grep -qi "error\|failed\|could not\|0xe0"; then
+        warn "bless --nextonly failed"
+    else
+        BLESS_OK=1
+    fi
 fi
 
 if [ "$BLESS_OK" -eq 0 ]; then
-    warn "bless --nextonly failed — trying without --nextonly (permanent boot change)..."
-    log "WARNING: without --nextonly, Ubuntu will be the default boot device until changed"
-
-    # Method 2: bless without --nextonly (permanent — firmware bug may only affect --nextonly)
-    bless --verbose --setBoot --mount "$ESP_MOUNT" --file "$ESP_MOUNT/EFI/boot/bootx64.efi" 2>&1 | tee -a "$LOG_FILE" && BLESS_OK=1
+    log "Trying without --nextonly (permanent boot change)..."
+    BLESS_OUT=$(bless --verbose --setBoot --mount "$ESP_MOUNT" --file "$ESP_MOUNT/EFI/boot/bootx64.efi" 2>&1) || true
+    echo "$BLESS_OUT" | tee -a "$LOG_FILE"
+    if echo "$BLESS_OUT" | grep -qi "error\|failed\|could not\|0xe0"; then
+        warn "bless (permanent) also failed"
+    else
+        BLESS_OK=1
+    fi
 fi
 
 if [ "$BLESS_OK" -eq 0 ]; then
@@ -728,9 +743,21 @@ if [ "$BLESS_OK" -eq 0 ]; then
         [ -d "$ESP_MOUNT" ] || die "ESP not remounted after sgdisk attempt"
     fi
 
-    bless --verbose --setBoot --mount "$ESP_MOUNT" --file "$ESP_MOUNT/EFI/boot/bootx64.efi" --nextonly 2>&1 | tee -a "$LOG_FILE" && BLESS_OK=1
+    BLESS_OUT=$(bless --verbose --setBoot --mount "$ESP_MOUNT" --file "$ESP_MOUNT/EFI/boot/bootx64.efi" --nextonly 2>&1) || true
+    echo "$BLESS_OUT" | tee -a "$LOG_FILE"
+    if echo "$BLESS_OUT" | grep -qi "error\|failed\|could not\|0xe0"; then
+        warn "bless --nextonly (after reformat) failed"
+    else
+        BLESS_OK=1
+    fi
     if [ "$BLESS_OK" -eq 0 ]; then
-        bless --verbose --setBoot --mount "$ESP_MOUNT" --file "$ESP_MOUNT/EFI/boot/bootx64.efi" 2>&1 | tee -a "$LOG_FILE" && BLESS_OK=1
+        BLESS_OUT=$(bless --verbose --setBoot --mount "$ESP_MOUNT" --file "$ESP_MOUNT/EFI/boot/bootx64.efi" 2>&1) || true
+        echo "$BLESS_OUT" | tee -a "$LOG_FILE"
+        if echo "$BLESS_OUT" | grep -qi "error\|failed\|could not\|0xe0"; then
+            warn "bless (permanent, after reformat) also failed"
+        else
+            BLESS_OK=1
+        fi
     fi
 fi
 
@@ -754,19 +781,35 @@ if [ "$BLESS_OK" -eq 0 ]; then
         # Variable name: efi-boot-next (not efi-boot-next-device) per bless output
         BOOT_PLIST="<array><dict><key>IOMatch</key><dict><key>IOProviderClass</key><string>IOMedia</string><key>IOPropertyMatch</key><dict><key>UUID</key><string>${ESP_UUID}</string></dict></dict><key>BLLastBSDName</key><string>${ESP_DEVICE}</string></dict><dict><key>IOEFIDevicePathType</key><string>MediaFilePath</string><key>Path</key><string>\\\\EFI\\\\boot\\\\bootx64.efi</string></dict></array>%00"
         log "Setting efi-boot-next via nvram..."
-        nvram "efi-boot-next=$BOOT_PLIST" 2>&1 | tee -a "$LOG_FILE" && BLESS_OK=1 && log "NVRAM boot-next set directly" || {
+        NVRAM_OUT=$(nvram "efi-boot-next=$BOOT_PLIST" 2>&1) || true
+        echo "$NVRAM_OUT" | tee -a "$LOG_FILE"
+        if echo "$NVRAM_OUT" | grep -qi "error\|not permitted\|failed"; then
             warn "efi-boot-next failed — trying permanent efi-boot-device..."
             ORIG_BOOT=$(nvram efi-boot-device 2>/dev/null || true)
-            nvram "efi-boot-device=$BOOT_PLIST" 2>&1 | tee -a "$LOG_FILE" && BLESS_OK=1 && log "NVRAM permanent boot device set" || \
+            NVRAM_OUT=$(nvram "efi-boot-device=$BOOT_PLIST" 2>&1) || true
+            echo "$NVRAM_OUT" | tee -a "$LOG_FILE"
+            if echo "$NVRAM_OUT" | grep -qi "error\|not permitted\|failed"; then
                 warn "Direct NVRAM set failed — SIP may protect boot variables"
-        }
+            else
+                BLESS_OK=1
+                log "NVRAM permanent boot device set"
+            fi
+        else
+            BLESS_OK=1
+            log "NVRAM boot-next set directly"
+        fi
     else
         warn "Could not determine ESP Partition UUID for NVRAM fallback"
-        # Last resort: try BSD-name-only format (firmware may accept this)
         BOOT_BSD="<array><dict><key>IOProviderClass</key><string>IOMedia</string><key>BLLastBSDName</key><string>${ESP_DEVICE}</string></dict><dict><key>IOEFIDevicePathType</key><string>MediaFilePath</string><key>Path</key><string>\\\\EFI\\\\boot\\\\bootx64.efi</string></dict></array>%00"
         log "Trying BSD-name-only NVRAM fallback..."
-        nvram "efi-boot-next=$BOOT_BSD" 2>&1 | tee -a "$LOG_FILE" && BLESS_OK=1 && log "NVRAM boot-next set (BSD name only)" || \
+        NVRAM_OUT=$(nvram "efi-boot-next=$BOOT_BSD" 2>&1) || true
+        echo "$NVRAM_OUT" | tee -a "$LOG_FILE"
+        if echo "$NVRAM_OUT" | grep -qi "error\|not permitted\|failed"; then
             warn "All NVRAM methods failed"
+        else
+            BLESS_OK=1
+            log "NVRAM boot-next set (BSD name only)"
+        fi
     fi
 fi
 
