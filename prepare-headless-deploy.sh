@@ -313,13 +313,22 @@ log "ESP mounted at: $ESP_MOUNT"
 # this for bless to work (diskutil eraseVolume sets it to Microsoft Basic Data)
 # Find the ACTUAL partition number — diskutil eraseVolume may renumber the slice
 ESP_ACTUAL_DEV=$(diskutil list "$INTERNAL_DISK" 2>/dev/null | grep "$ESP_NAME" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
+ESPTYPE_FIXED=0
 if [ -n "$ESP_ACTUAL_DEV" ]; then
     ESP_PART_NUM=$(echo "$ESP_ACTUAL_DEV" | grep -oE '[0-9]+$')
     diskutil unmount "$ESP_MOUNT" 2>/dev/null || true
-    sgdisk --typecode="${ESP_PART_NUM}":C12A7328-F81F-11D2-BA4B-00A0C93EC93B "$INTERNAL_DISK" || \
-        warn "Could not set EFI partition type — bless may fail"
-    diskutil mount "$ESP_MOUNT" 2>/dev/null || true
-    [ -d "$ESP_MOUNT" ] || die "ESP not remounted after partition type change"
+    # Try sgdisk with raw device first (macOS may lock /dev/diskN for writing)
+    RDISK="/dev/r$(basename "$INTERNAL_DISK")"
+    sgdisk --typecode="${ESP_PART_NUM}":C12A7328-F81F-11D2-BA4B-00A0C93EC93B "$RDISK" 2>/dev/null && ESPTYPE_FIXED=1 || \
+    sgdisk --typecode="${ESP_PART_NUM}":C12A7328-F81F-11D2-BA4B-00A0C93EC93B "$INTERNAL_DISK" 2>/dev/null && ESPTYPE_FIXED=1 || \
+        warn "Could not set EFI partition type (disk locked) — trying bless anyway"
+    if [ "$ESPTYPE_FIXED" -eq 1 ]; then
+        log "EFI partition type set to C12A7328 (EFI System Partition)"
+    fi
+    diskutil mount "/dev/$ESP_ACTUAL_DEV" 2>/dev/null || true
+    if [ ! -d "$ESP_MOUNT" ]; then
+        die "ESP not remounted after partition type change — try 'diskutil mount /dev/$ESP_ACTUAL_DEV' manually"
+    fi
 else
     warn "Could not find CIDATA partition for GPT typecode change — bless may fail"
 fi
@@ -659,9 +668,11 @@ log "Step 7: Setting boot device with bless (--nextonly for safety)..."
 
 # Use --nextonly so that if the installer fails, the next boot falls back to macOS.
 # Once Ubuntu is confirmed running, set permanent boot device from within Ubuntu.
-# bless does NOT validate the target file — we checked BOOTX64.EFI exists above.
+if [ "$ESPTYPE_FIXED" -eq 0 ]; then
+    warn "ESP GPT type is still Microsoft Basic Data (sgdisk failed) — bless may or may not work"
+fi
 bless --setBoot --mount "$ESP_MOUNT" --file "$ESP_MOUNT/EFI/boot/bootx64.efi" --nextonly || \
-    die "bless failed (exit $?) — EFI firmware cannot set boot device. Ensure the ESP partition type is C12A7328-F81F-11D2-BA4B-00A0C93EC93B and BOOTX64.EFI exists."
+    die "bless failed (exit $?) — EFI firmware cannot set boot device. GPT type may need to be C12A7328 (EFI System Partition)."
 
 log "Verifying boot device..."
 bless --info "$ESP_MOUNT" 2>/dev/null || warn "Could not verify boot device with bless --info"
