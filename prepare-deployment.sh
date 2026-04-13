@@ -93,6 +93,11 @@ revert_changes() {
         # USB method cleanup - unmount but don't erase USB
         log "Unmounting USB device $TARGET_DEVICE..."
         diskutil unmountDisk "$TARGET_DEVICE" 2>/dev/null || true
+    elif [ "$DEPLOY_METHOD" = "4" ]; then
+        # VM test cleanup — just power off VM if running
+        if command -v VBoxManage >/dev/null 2>&1; then
+            VBoxManage controlvm macpro-vmtest poweroff 2>/dev/null || true
+        fi
     fi
 
     if [ "$REVERT_ERRORS" -eq 0 ]; then
@@ -145,16 +150,22 @@ select_deployment_method() {
     echo "     - Requires: USB drive (4GB+), keyboard + monitor"
     echo "     - You handle all install choices manually"
     echo ""
+    echo "  4) VM test (VirtualBox)"
+    echo "     - Validates autoinstall flow in a VirtualBox VM on this Mac"
+    echo "     - No Mac Pro hardware needed — tests DKMS compilation, driver loading"
+    echo "     - Requires: VirtualBox, 4GB+ disk space"
+    echo "     - Uses Ethernet (no WiFi HW in VM), single disk (no dual-boot)"
+    echo ""
 
     while true; do
-        read -rp "Enter choice [1-3]: " choice
+        read -rp "Enter choice [1-4]: " choice
         case "$choice" in
-            1|2|3)
+            1|2|3|4)
                 DEPLOY_METHOD="$choice"
                 break
                 ;;
             *)
-                echo "Invalid choice. Please enter 1, 2, or 3."
+                echo "Invalid choice. Please enter 1, 2, 3, or 4."
                 ;;
         esac
     done
@@ -227,9 +238,10 @@ confirm_settings() {
         1) echo "  Deployment method: Internal partition (ESP)" ;;
         2) echo "  Deployment method: USB drive" ;;
         3) echo "  Deployment method: Full manual" ;;
+        4) echo "  Deployment method: VM test (VirtualBox)" ;;
     esac
 
-    if [ "$DEPLOY_METHOD" != "3" ]; then
+    if [ "$DEPLOY_METHOD" != "3" ] && [ "$DEPLOY_METHOD" != "4" ]; then
         case "$STORAGE_LAYOUT" in
             1) echo "  Storage layout: Dual-boot (preserve macOS)" ;;
             2) echo "  Storage layout: Full disk (replace macOS)" ;;
@@ -1162,6 +1174,72 @@ deploy_usb() {
     show_usb_instructions
 }
 
+deploy_vm_test() {
+    log "Starting VM test deployment..."
+
+    if ! command -v VBoxManage >/dev/null 2>&1; then
+        die "VirtualBox not found. Install from https://www.virtualbox.org/ or: brew install --cask virtualbox"
+    fi
+
+    local BASE_ISO=""
+    for loc in "$SCRIPT_DIR"/prereqs/ubuntu-24.04*.iso "$HOME"/Downloads/ubuntu-24.04*.iso; do
+        if [ -f "$loc" ]; then
+            BASE_ISO="$loc"
+            break
+        fi
+    done
+    if [ -z "$BASE_ISO" ]; then
+        die "Stock Ubuntu Server ISO not found in prereqs/. Download from https://ubuntu.com/download/server"
+    fi
+    log "Using base ISO: $BASE_ISO"
+
+    local VM_DIR="$SCRIPT_DIR/vm-test"
+    local VM_ISO="$VM_DIR/ubuntu-vmtest.iso"
+
+    if [ ! -f "$VM_ISO" ]; then
+        log "Building VM test ISO..."
+        sudo "$VM_DIR/build-iso-vm.sh" || die "VM ISO build failed"
+    else
+        log "VM test ISO already exists: $VM_ISO"
+        read -rp "Rebuild? (y/N): " rebuild
+        if [ "$rebuild" = "y" ] || [ "$rebuild" = "Y" ]; then
+            sudo "$VM_DIR/build-iso-vm.sh" || die "VM ISO build failed"
+        fi
+    fi
+
+    [ -f "$VM_ISO" ] || die "VM test ISO not found after build"
+
+    local VM_NAME="macpro-vmtest"
+    if VBoxManage list vms 2>/dev/null | grep -q "\"$VM_NAME\""; then
+        log "VM '$VM_NAME' already exists"
+        read -rp "Recreate? (y/N): " recreate
+        if [ "$recreate" = "y" ] || [ "$recreate" = "Y" ]; then
+            "$VM_DIR/create-vm.sh" --force || die "VM creation failed"
+        fi
+    else
+        log "Creating VirtualBox VM..."
+        "$VM_DIR/create-vm.sh" || die "VM creation failed"
+    fi
+
+    if ! lsof -i :8080 >/dev/null 2>&1; then
+        log "Starting monitoring server..."
+        (cd "$SCRIPT_DIR/macpro-monitor" && ./start.sh) || warn "Monitor start failed (non-critical)"
+        sleep 2
+    fi
+
+    echo ""
+    log "VM test environment ready!"
+    echo ""
+    echo "  Next steps:"
+    echo "    1. Monitor: open http://localhost:8080 in a browser"
+    echo "    2. Run test: cd vm-test && ./test-vm.sh"
+    echo "    3. SSH into VM (when ready): ssh -p 2222 teja@localhost"
+    echo "    4. Serial console log: tail -f /tmp/vmtest-serial.log"
+    echo "    5. Stop VM: cd vm-test && ./test-vm.sh stop"
+    echo "    6. Grab logs: cd vm-test && ./test-vm.sh logs"
+    echo ""
+}
+
 deploy_manual() {
     log "Starting full manual USB deployment..."
 
@@ -1406,7 +1484,7 @@ main() {
 
     select_deployment_method
 
-    if [ "$DEPLOY_METHOD" != "3" ]; then
+    if [ "$DEPLOY_METHOD" != "3" ] && [ "$DEPLOY_METHOD" != "4" ]; then
         select_storage_layout
         select_network_type
     fi
@@ -1423,6 +1501,9 @@ main() {
             ;;
         3)
             deploy_manual
+            ;;
+        4)
+            deploy_vm_test
             ;;
         *)
             die "Unknown deployment method: $DEPLOY_METHOD"
