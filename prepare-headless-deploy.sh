@@ -103,7 +103,7 @@ trap 'cleanup_on_error; exit 143' SIGTERM
 
 echo "========================================="
 echo " Mac Pro 2013 Headless Ubuntu Deploy"
-echo " Remote installation via bless"
+echo " Remote installation via bless/keyboard"
 echo "========================================="
 echo ""
 touch "$LOG_FILE" || LOG_FILE="/dev/null"
@@ -771,32 +771,66 @@ if [ "$BLESS_OK" -eq 0 ]; then
 fi
 
 if [ "$BLESS_OK" -eq 0 ]; then
-    die "All boot device methods failed. See log at $LOG_FILE. Manual attempts:
-  bless --verbose --setBoot --mount /Volumes/CIDATA --file /Volumes/CIDATA/EFI/boot/bootx64.efi --nextonly
-  bless --verbose --setBoot --mount /Volumes/CIDATA --file /Volumes/CIDATA/EFI/boot/bootx64.efi
-  sudo nvram efi-boot-next='<array><dict>...'</array>'"
+    warn "All automated boot device methods failed (SIP blocks NVRAM writes)."
+    warn "Manual boot selection required via keyboard at next boot."
 fi
 
-log "Verifying boot device..."
-bless --info "$ESP_MOUNT" 2>/dev/null || warn "Could not verify boot device with bless --info"
-log "Boot device set via bless (--nextonly: reverts to macOS only if firmware cannot find bootloader)"
-log "ESP: $ESP_MOUNT"
-log "Bootloader: $ESP_MOUNT/EFI/boot/BOOTX64.EFI"
+log "Verifying ESP boot files..."
+if [ -f "$ESP_MOUNT/EFI/boot/bootx64.efi" ]; then
+    log "ESP boot files verified ✓"
+else
+    die "ESP boot files missing — cannot boot from ESP"
+fi
+
+if [ "$BLESS_OK" -eq 1 ]; then
+    bless --info "$ESP_MOUNT" 2>/dev/null || warn "Could not verify boot device with bless --info"
+fi
 echo ""
 
 # ── Step 8: Confirm and reboot ──
+
+BLIND_BOOT=0
+if [ "$BLESS_OK" -eq 0 ]; then
+    BLIND_BOOT=1
+fi
 
 echo "========================================="
 echo " READY TO REBOOT"
 echo "========================================="
 echo ""
-echo "Current boot device has been changed to:"
-echo "  $ESP_MOUNT (ESP with Ubuntu installer)"
+
+if [ "$BLIND_BOOT" -eq 1 ]; then
+echo "⚠  SIP blocks NVRAM writes — boot device NOT set automatically."
+echo "   Manual keyboard selection required at boot."
+echo ""
+echo "BLIND BOOT PROCEDURE (no monitor required):"
+echo "  1. Press and HOLD the Option (Alt) key"
+echo "  2. Press the power button (or: sudo shutdown -r now from SSH)"
+echo "  3. KEEP HOLDING Option for ~10 seconds until Startup Manager loads"
+echo "  4. Press Right Arrow once to select CIDATA"
+echo "  5. Press Enter to boot"
+echo ""
+echo "If CIDATA is not the second item, try:"
+echo "  - Press Right Arrow twice, then Enter"
+echo "  - Or press Left Arrow to cycle in reverse"
+echo ""
+echo "The Startup Manager scans all EFI partitions."
+echo "CIDATA should appear as a separate disk icon."
+echo ""
+echo "SAFETY: If you select the wrong disk, the Mac Pro will"
+echo "boot back into macOS (no harm done — just try again)."
+echo ""
+echo "After Ubuntu installs, efibootmgr will set permanent"
+echo "boot order from Linux (no SIP restrictions there)."
+echo ""
+else
+echo "Boot device set via bless (--nextonly: reverts to macOS only if firmware cannot find bootloader)."
 echo ""
 echo "NOTE: --nextonly was used with bless."
 echo "If the ESP boot files are corrupt and the firmware"
 echo "cannot find a valid bootloader, the NEXT reboot will"
 echo "fall back to macOS automatically."
+echo ""
 echo "HOWEVER: Once the installer successfully boots and"
 echo "begins autoinstall (which wipes the disk), macOS is"
 echo "preserved (dual-boot). However, if the installer fails mid-process,"
@@ -804,24 +838,38 @@ echo "physical access may be required to restore boot order."
 echo ""
 echo "On next reboot, the Mac Pro will boot into"
 echo "Ubuntu Server autoinstall and begin installation."
+fi
+
 echo ""
 echo "To monitor: start webhook monitor on MacBook"
 echo "  cd macpro-monitor && ./start.sh"
 echo ""
+if [ "$BLESS_OK" -eq 0 ]; then
+echo "To cancel: leave boot device unchanged (macOS remains default)"
+echo "  Simply reboot without holding Option → boots macOS"
+fi
+if [ "$BLESS_OK" -eq 1 ]; then
 echo "To cancel: reset NVRAM boot device"
 echo "  sudo bless --mount '/Volumes/Macintosh HD' --setBoot  # reset to macOS"
+fi
 echo ""
-if [ -t 0 ] && [ "${DEPLOY_HEADLESS:-}" != "1" ]; then
-    read -p "Reboot now? (yes/no): " CONFIRM
-    if [ "$CONFIRM" = "yes" ]; then
-        log "Rebooting..."
-        shutdown -r now
-    else
-        log "Reboot cancelled. Boot device is set (--nextonly) but not activated."
-        log "Run 'shutdown -r now' when ready."
-    fi
+
+if [ "$BLIND_BOOT" -eq 1 ]; then
+    log "ESP is ready. Manual keyboard selection required at next boot."
+    log "Run 'sudo shutdown -r now' when ready to reboot, then hold Option at boot."
 else
-    log "Non-interactive mode detected. Rebooting in 5 seconds..."
-    sleep 5
-    shutdown -r now
+    if [ -t 0 ] && [ "${DEPLOY_HEADLESS:-}" != "1" ]; then
+        read -p "Reboot now? (yes/no): " CONFIRM
+        if [ "$CONFIRM" = "yes" ]; then
+            log "Rebooting..."
+            shutdown -r now
+        else
+            log "Reboot cancelled. Boot device is set (--nextonly) but not activated."
+            log "Run 'shutdown -r now' when ready."
+        fi
+    else
+        log "Non-interactive mode detected. Rebooting in 5 seconds..."
+        sleep 5
+        shutdown -r now
+    fi
 fi

@@ -605,6 +605,24 @@ autoinstall:
       mkdir -p /target/usr/local/bin
       printf '#!/bin/bash\nset -e\nexport LIBEFIVAR_OPS=efivarfs\nEFIVARS="/sys/firmware/efi/efivars"\nif [ ! -d "$EFIVARS" ]; then\n  echo "ERROR: EFI variables not available" >&2\n  exit 1\nfi\nMACOS_BOOT=$(efibootmgr | grep -i "macos\\|apple" | head -1 | grep -o "Boot[0-9A-F]\\{4\\}" | sed "s/Boot//" || true)\nif [ -z "$MACOS_BOOT" ]; then\n  MACOS_BOOT=$(efibootmgr | grep "Boot80\\|Boot81" | head -1 | grep -o "Boot[0-9A-F]\\{4\\}" | sed "s/Boot//" || true)\nfi\nif [ -z "$MACOS_BOOT" ]; then\n  echo "WARNING: macOS boot entry not found in EFI variables" >&2\n  echo "Use Apple Boot Manager (hold Option at boot) instead" >&2\n  exit 1\nfi\nefibootmgr --bootnext "$MACOS_BOOT"\necho "macOS set as next boot device. Reboot to start macOS."\n' > /target/usr/local/bin/boot-macos
       chmod +x /target/usr/local/bin/boot-macos
+      # Ensure Ubuntu is the default boot device (first in boot order)
+      # efibootmgr is in /target but needs /sys/firmware/efi bind-mounted for chroot
+      mount --bind /sys /target/sys 2>/dev/null || true
+      mount --bind /proc /target/proc 2>/dev/null || true
+      export LIBEFIVAR_OPS=efivarfs
+      UBUNTU_BOOT=$(chroot /target efibootmgr | grep -i "ubuntu" | head -1 | grep -o "Boot[0-9A-F]\\{4\\}" | sed "s/Boot//" || true)
+      if [ -n "$UBUNTU_BOOT" ]; then
+        BOOT_ORDER=$(chroot /target efibootmgr | grep "BootOrder" | sed "s/BootOrder: //" || true)
+        if [ -n "$BOOT_ORDER" ]; then
+          NEW_ORDER=$(echo "$BOOT_ORDER" | sed "s/$UBUNTU_BOOT,//;s/,$UBUNTU_BOOT//;s/^$UBUNTU_BOOT,*/$UBUNTU_BOOT,/")
+          if [ "$NEW_ORDER" != "$BOOT_ORDER" ]; then
+            chroot /target efibootmgr --bootorder "$UBUNTU_BOOT,$NEW_ORDER" 2>/dev/null || log "WARN: could not set boot order"
+            log "Ubuntu set as first boot device"
+          fi
+        fi
+      else
+        log "WARN: Ubuntu boot entry not found in EFI variables — GRUB install may not have created one"
+      fi
       # Workaround for Apple EFI 1.1 bug (Bug #2040190)
       grep -q '^LIBEFIVAR_OPS=' /target/etc/environment 2>/dev/null || echo 'LIBEFIVAR_OPS=efivarfs' >> /target/etc/environment
       wh '{"progress":78,"stage":"late-grub","status":"configured","message":"GRUB bootloader configured with macOS entry"}'
