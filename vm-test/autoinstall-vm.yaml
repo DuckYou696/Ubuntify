@@ -503,7 +503,7 @@ autoinstall:
 
       wh '{"progress":75,"stage":"late-grub","status":"configuring","message":"Configuring GRUB bootloader"}'
       mkdir -p /target/etc/default/grub.d
-      echo 'GRUB_CMDLINE_LINUX_DEFAULT="nomodeset console=ttyS0,115200"' > /target/etc/default/grub.d/macpro.cfg
+      echo 'GRUB_CMDLINE_LINUX_DEFAULT="nomodeset amdgpu.si.modeset=0 console=ttyS0,115200"' > /target/etc/default/grub.d/macpro.cfg
       sed -i 's/^GRUB_DISABLE_OS_PROBER=.*/GRUB_DISABLE_OS_PROBER=false/' /target/etc/default/grub
       if ! grep -q '^GRUB_DISABLE_OS_PROBER=' /target/etc/default/grub; then
         echo 'GRUB_DISABLE_OS_PROBER=false' >> /target/etc/default/grub
@@ -595,7 +595,7 @@ autoinstall:
       # UFW is installed via packages: section, no apt-get needed
       if chroot /target which ufw 2>/dev/null; then
         chroot /target ufw default deny incoming 2>>"$LOG" || true
-        chroot /target ufw allow ssh 2>>"$LOG" || true
+        chroot /target ufw allow 22/tcp 2>>"$LOG" || true
         chroot /target ufw --force enable 2>>"$LOG" || true
       else
         log "WARN: ufw not found in target (install may have failed)"

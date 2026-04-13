@@ -44,6 +44,8 @@ autoinstall:
       wh() { curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1 || true; }
       die() { echo "[early] FATAL: $1" >> "$LOG"; wh "{\"progress\":${2:-0},\"stage\":\"early\",\"status\":\"failed\",\"message\":\"FATAL: $1\"}"; exit 1; }
       log() { echo "[early] $1" >> "$LOG"; }
+      _dump_log() { cat "$LOG" > /dev/console 2>/dev/null || true; }
+      trap '_dump_log' EXIT
 
       # Verify target disk exists and is the only internal disk
       if [ ! -e /dev/sda ]; then
@@ -383,6 +385,8 @@ autoinstall:
       wh() { curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1 || true; }
       die() { echo "[late] FATAL: $1" >> "$LOG"; wh "{\"progress\":${2:-29},\"stage\":\"late\",\"status\":\"failed\",\"message\":\"FATAL: $1\"}"; exit 1; }
       log() { echo "[late] $1" >> "$LOG"; }
+      _dump_log() { cat "$LOG" > /dev/console 2>/dev/null || true; }
+      trap '_dump_log' EXIT
 
       log "Late commands starting..."
       wh '{"progress":29,"stage":"late-init","status":"running","message":"Late commands started — verifying WiFi health"}'
@@ -514,7 +518,7 @@ autoinstall:
 
       # Bind-mount /proc, /sys, /dev for chroot DKMS compilation
       # Set up cleanup trap so mounts are always unmounted, even on failure
-      trap 'umount /target/dev /target/sys /target/proc 2>/dev/null || true' EXIT
+      trap '_dump_log; umount /target/dev /target/sys /target/proc 2>/dev/null || true' EXIT
       mount --bind /proc /target/proc 2>>"$LOG" || { die "mount /proc failed" 60; }
       mount --bind /sys /target/sys 2>>"$LOG" || { umount /target/proc 2>/dev/null || true; die "mount /sys failed" 60; }
       mount --bind /dev /target/dev 2>>"$LOG" || { umount /target/sys /target/proc 2>/dev/null || true; die "mount /dev failed" 60; }
@@ -705,7 +709,7 @@ autoinstall:
       wh '{"progress":88,"stage":"late-firewall","status":"configuring","message":"Configuring firewall"}'
       if chroot /target which ufw 2>/dev/null; then
         chroot /target ufw default deny incoming 2>>"$LOG" || true
-        chroot /target ufw allow ssh 2>>"$LOG" || true
+        chroot /target ufw allow 22/tcp 2>>"$LOG" || true
         chroot /target ufw --force enable 2>>"$LOG" || true
       else
         log "WARN: ufw not found in target (install may have failed)"
@@ -803,6 +807,9 @@ autoinstall:
     - |
       WHURL="http://192.168.1.115:8080/webhook"
       wh() { curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1 || true; }
+      LOG="/run/macpro.log"
+      _dump_log() { cat "$LOG" > /dev/console 2>/dev/null || true; }
+      trap '_dump_log' EXIT
 
       wh '{"progress":0,"stage":"error","status":"failed","message":"Installation failed — check logs on target system"}'
       ERR_DIR="/var/log/macpro-install"
@@ -817,6 +824,8 @@ autoinstall:
         mkdir -p /target/var/log/macpro-install 2>/dev/null || true
         cp "$ERR_DIR/"* /target/var/log/macpro-install/ 2>/dev/null || true
       fi
+
+      exit 1
 
   # NOTE: Using reboot (not poweroff) because headless deployment requires
   # remote access after installation completes. The GPU cold-boot quirk
