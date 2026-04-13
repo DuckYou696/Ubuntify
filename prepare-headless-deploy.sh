@@ -273,6 +273,15 @@ echo ""
 
 log "Step 4: Creating ESP partition for Ubuntu installer..."
 
+# Remove leftover CIDATA ESP from a previous failed run
+EXISTING_ESP=$(diskutil list "$INTERNAL_DISK" 2>/dev/null | grep "$ESP_NAME" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
+if [ -n "$EXISTING_ESP" ]; then
+    log "Removing existing $ESP_NAME partition /dev/$EXISTING_ESP..."
+    diskutil unmount "/dev/$EXISTING_ESP" 2>/dev/null || true
+    diskutil eraseVolume free none "/dev/$EXISTING_ESP" 2>/dev/null || warn "Could not remove existing ESP"
+    sleep 1
+fi
+
 FREE_START=$(diskutil list "$INTERNAL_DISK" | grep -E '\(free\)' -B1 | head -1 | grep -oE '[0-9]+\.[0-9]+ GB' || true)
 log "Free space after resize: ${FREE_START:-unknown}"
 
