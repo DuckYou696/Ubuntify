@@ -825,6 +825,13 @@ else
     die "ESP boot files missing — cannot boot from ESP"
 fi
 
+# Enable startup chime for timing reference during blind keyboard boot (StartupMute, not SystemStartupMute)
+CURRENT_MUTE=$(nvram StartupMute 2>/dev/null | awk '{print $2}' || true)
+if [ "$CURRENT_MUTE" != "%00" ]; then
+    log "Enabling startup chime for blind boot timing..."
+    nvram StartupMute=%00 2>/dev/null || warn "Could not enable startup chime (SIP may block NVRAM writes — run: sudo nvram StartupMute=%00)"
+fi
+
 if [ "$BLESS_OK" -eq 1 ]; then
     bless --info "$ESP_MOUNT" 2>/dev/null || warn "Could not verify boot device with bless --info"
 fi
@@ -854,10 +861,11 @@ echo "    Right: CIDATA (Ubuntu installer)"
 echo ""
 echo "  Method A — Startup Manager (recommended):"
 echo "    1. Run: sudo shutdown -r now"
-echo "    2. IMMEDIATELY hold Option (Alt) key after chime"
-echo "    3. Hold for 5-10 seconds (Startup Manager scans SSD in ~3s)"
-echo "    4. Press Right Arrow once → selects CIDATA"
-echo "    5. Press Enter → boots Ubuntu installer"
+echo "    2. Wait 2-3 seconds after startup chime (USB dongle keyboard reconnects)"
+echo "    3. Press and HOLD Option (Alt) key for 5-10 seconds"
+echo "    4. Release Option — Startup Manager shows disk icons"
+echo "    5. Press Right Arrow once → selects CIDATA"
+echo "    6. Press Enter → boots Ubuntu installer"
 echo ""
 echo "  Method B — Recovery Mode (if Method A fails):"
 echo "    1. Run: sudo shutdown -r now"
