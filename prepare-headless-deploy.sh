@@ -158,33 +158,38 @@ if [ -n "$SNAPSHOTS" ]; then
 fi
 echo ""
 
-# ── Step 3: Shrink APFS container ──
+# ── Step 3: Shrink APFS container (skip if sufficient free space exists) ──
 
-log "Step 3: Shrinking APFS container..."
+log "Step 3: Checking APFS container size..."
 
 CURRENT_SIZE=$(diskutil info "$APFS_CONTAINER" 2>/dev/null | grep "Disk Size" | grep -oE '[0-9]+\.[0-9]+ GB' || true)
 log "Current APFS size: ${CURRENT_SIZE:-unknown}"
 
-MIN_MACOS_GB=50
-
-log "Purging purgeable APFS space..."
-tmutil thinlocalsnapshots / 999999999999 2>/dev/null || true
-
-USED_GB=$(diskutil apfs list "$APFS_CONTAINER" 2>/dev/null | grep "Capacity In Use By Volumes" | grep -oE '[0-9]+\.[0-9]+ GB' | head -1 | grep -oE '[0-9]+\.[0-9]+' || true)
-if [ -z "$USED_GB" ]; then
-    USED_GB=$(diskutil apfs list "$APFS_CONTAINER" 2>/dev/null | grep "Capacity In Use By Volumes" | grep -oE '[0-9]+ B' | head -1 | awk '{printf "%.1f", $1/1024/1024/1024}' || true)
-fi
-
-if [ -n "$USED_GB" ]; then
-    TARGET_MACOS_GB=$(echo "$USED_GB" | awk -v min="$MIN_MACOS_GB" -v margin=10 '{target=int($1)+margin+1; if(target<min) target=min; print target}')
-    log "APFS in use: ${USED_GB}GB → shrinking to ${TARGET_MACOS_GB}GB (5GB margin)"
+EXISTING_FREE_GB=$(diskutil list "$INTERNAL_DISK" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+ GB[[:space:]]*$' | head -1 | grep -oE '[0-9]+\.[0-9]+' || true)
+if [ -n "$EXISTING_FREE_GB" ] && echo "$EXISTING_FREE_GB" | awk '{exit !($1 >= 5)}'; then
+    log "Free space already ${EXISTING_FREE_GB}GB — skipping APFS resize"
 else
-    TARGET_MACOS_GB=200
-    warn "Could not determine APFS usage — defaulting to ${TARGET_MACOS_GB}GB for macOS"
-fi
+    MIN_MACOS_GB=50
 
-diskutil apfs resizeContainer "$APFS_CONTAINER" "${TARGET_MACOS_GB}g" || die "APFS resize failed"
-log "APFS container resized to ${TARGET_MACOS_GB}GB"
+    log "Purging purgeable APFS space..."
+    tmutil thinlocalsnapshots / 999999999999 2>/dev/null || true
+
+    USED_GB=$(diskutil apfs list "$APFS_CONTAINER" 2>/dev/null | grep "Capacity In Use By Volumes" | grep -oE '[0-9]+\.[0-9]+ GB' | head -1 | grep -oE '[0-9]+\.[0-9]+' || true)
+    if [ -z "$USED_GB" ]; then
+        USED_GB=$(diskutil apfs list "$APFS_CONTAINER" 2>/dev/null | grep "Capacity In Use By Volumes" | grep -oE '[0-9]+ B' | head -1 | awk '{printf "%.1f", $1/1024/1024/1024}' || true)
+    fi
+
+    if [ -n "$USED_GB" ]; then
+        TARGET_MACOS_GB=$(echo "$USED_GB" | awk -v min="$MIN_MACOS_GB" -v margin=10 '{target=int($1)+margin+1; if(target<min) target=min; print target}')
+        log "APFS in use: ${USED_GB}GB → shrinking to ${TARGET_MACOS_GB}GB (10GB margin)"
+    else
+        TARGET_MACOS_GB=200
+        warn "Could not determine APFS usage — defaulting to ${TARGET_MACOS_GB}GB for macOS"
+    fi
+
+    diskutil apfs resizeContainer "$APFS_CONTAINER" "${TARGET_MACOS_GB}g" || die "APFS resize failed"
+    log "APFS container resized to ${TARGET_MACOS_GB}GB"
+fi
 echo ""
 
 # ── Step 4: Create ESP partition ──
