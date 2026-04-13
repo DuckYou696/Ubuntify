@@ -1,4 +1,7 @@
 #!/bin/bash
+set -e
+set -o pipefail
+set -u
 cd "$(dirname "$0")"
 
 # 1. Check if the process is running OR if old files exist

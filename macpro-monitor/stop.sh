@@ -1,4 +1,7 @@
 #!/bin/bash
+set -e
+set -o pipefail
+set -u
 cd "$(dirname "$0")"
 if [ -f server.pid ] && kill -0 "$(cat server.pid)" 2>/dev/null; then
     echo "Stopping existing server..."

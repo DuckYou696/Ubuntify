@@ -1,19 +1,18 @@
 #!/bin/bash
 set -e
 set -o pipefail
+set -u
 
 readonly SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 readonly PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+readonly LIB_DIR="${PROJECT_DIR}/lib"
 readonly BASE_ISO="${PROJECT_DIR}/prereqs/ubuntu-24.04.4-live-server-amd64.iso"
 readonly AUTOINSTALL="${SCRIPT_DIR}/autoinstall-vm.yaml"
 readonly PKGS_DIR="${PROJECT_DIR}/packages"
 readonly OUTPUT_ISO="${SCRIPT_DIR}/ubuntu-vmtest.iso"
 readonly STAGING="/tmp/vmtest-iso-staging"
 
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly NC='\033[0m'
+source "$LIB_DIR/colors.sh"
 
 log()   { echo -e "${GREEN}[build]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
@@ -121,6 +120,9 @@ echo "  ... (preserving original boot structure)"
 
 # BOOT_PARAMS comes from xorriso reading the trusted base ISO;
 # eval is required to properly expand its multi-word arguments as positional args to xorriso
+if echo "$BOOT_PARAMS" | grep -qE '[;&|`$()]'; then
+    die "Suspicious characters in boot parameters — possible injection"
+fi
 eval "xorriso -as mkisofs \
     $BOOT_PARAMS \
     -V \"cidata\" \

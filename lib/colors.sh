@@ -6,6 +6,9 @@
 # colored terminal output across the deployment scripts.
 #
 
+[ "${_COLORS_SH_SOURCED:-0}" -eq 1 ] && return 0
+_COLORS_SH_SOURCED=1
+
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[0;33m'
