@@ -14,6 +14,10 @@ _REMOTE_SH_SOURCED=1
 
 source "${LIB_DIR:-./lib}/colors.sh"
 source "${LIB_DIR:-./lib}/logging.sh"
+source "${LIB_DIR:-./lib}/tui.sh" 2>/dev/null || true
+source "${LIB_DIR:-./lib}/retry.sh" 2>/dev/null || true
+source "${LIB_DIR:-./lib}/rollback.sh" 2>/dev/null || true
+source "${LIB_DIR:-./lib}/verify.sh" 2>/dev/null || true
 
 ## Connection Helpers
 
@@ -29,10 +33,16 @@ remote__ssh_cmd() {
 }
 
 remote__exec() {
-    local host="$1"
+    local host="${1:-macpro-linux}"
     shift
     local cmd="$*"
-    ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "$cmd"
+    local ssh_cmd="ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no $host"
+
+    if command -v retry_ssh >/dev/null 2>&1; then
+        retry_ssh "$host" "$cmd"
+    else
+        $ssh_cmd "$cmd"
+    fi
 }
 
 ## Connection
@@ -188,25 +198,190 @@ Pin-Priority: 1001"
     log "Kernel re-pinned successfully"
 }
 
-remote_kernel_update() {
+remote_pin_kernel() {
     local host
     host=$(remote__get_host "${1:-}")
 
-    error "WARNING: Full kernel update is a multi-phase process with ROLLBACK capability required."
-    error "This function must be run interactively with Phase 1-7 verification."
-    error "Please follow the process in How-to-Update.md manually."
+    remote_kernel_repin "$host"
+}
+
+remote_unpin_kernel() {
+    local host
+    host=$(remote__get_host "${1:-}")
+
+    remote_kernel_unpin "$host"
+}
+
+remote_toggle_apt_sources() {
+    local host
+    local action
+    host=$(remote__get_host "${1:-}")
+    action="${2:-}"
+
+    case "$action" in
+        enable)
+            remote_apt_enable "$host"
+            ;;
+        disable)
+            remote_apt_disable "$host"
+            ;;
+        *)
+            error "remote_toggle_apt_sources: unknown action '$action'. Use 'enable' or 'disable'."
+            return 1
+            ;;
+    esac
+}
+
+remote_kernel_update() {
+    local host="${1:-macpro-linux}"
+    local kver new_kver current_kver
+
+    log "Starting interactive kernel update on $host..."
+    log "This is a 7-phase process with rollback capability at each step."
     echo ""
-    log "Summary of phases:"
-    echo "  Phase 1: Enable apt sources"
-    echo "  Phase 2: Remove holds and pinning (remote_kernel_unpin)"
-    echo "  Phase 3: apt-get dist-upgrade"
-    echo "  Phase 4: Verify DKMS built wl.ko for new kernel"
-    echo "  Phase 5: Configure GRUB fallback (old kernel = default)"
-    echo "  Phase 6: grub-reboot into new kernel (one-time)"
-    echo "  Phase 7: Re-lock system (holds, preferences, sources)"
-    echo ""
-    warn "Use remote_kernel_unpin for Phase 2, then run remaining phases manually."
-    return 1
+
+    log "Pre-update checklist:"
+    if ! remote_test_connection "$host"; then
+        error "Cannot connect to $host"
+        return 1
+    fi
+
+    kver=$(remote__exec "$host" "uname -r") || { error "Failed to get kernel version"; return 1; }
+    current_kver="$kver"
+    log "Current kernel: $current_kver"
+
+    if ! command -v _remote_kernel_update_rollback >/dev/null 2>&1; then
+        warn "Rollback helper not available — failures will require manual recovery"
+    fi
+
+    if ! tui_confirm "Kernel Update: Phase 1 of 7" "Enable apt package sources on $host?"; then
+        return 1
+    fi
+    remote_toggle_apt_sources "$host" enable || return 1
+    remote__exec "$host" "echo 'KUPDATE_PHASE=1' > /tmp/macpro-kernel-update.env"
+    log "Phase 1 complete: apt sources enabled"
+
+    if ! tui_confirm "Kernel Update: Phase 2 of 7" "Remove kernel pinning and apt holds?"; then
+        _remote_kernel_update_rollback "$host" "1"
+        return 1
+    fi
+    remote_unpin_kernel "$host" || { _remote_kernel_update_rollback "$host" "1"; return 1; }
+    remote__exec "$host" "echo 'KUPDATE_PHASE=2' > /tmp/macpro-kernel-update.env"
+    log "Phase 2 complete: kernel unpinned, holds removed"
+
+    if ! tui_confirm "Kernel Update: Phase 3 of 7" "Run apt-get dist-upgrade? This will install a new kernel if available."; then
+        _remote_kernel_update_rollback "$host" "2"
+        return 1
+    fi
+    remote__exec "$host" "sudo apt-get update && sudo apt-get dist-upgrade -y" || {
+        _remote_kernel_update_rollback "$host" "2"
+        return 1
+    }
+    remote__exec "$host" "echo 'KUPDATE_PHASE=3' > /tmp/macpro-kernel-update.env"
+    log "Phase 3 complete: dist-upgrade finished"
+
+    new_kver=$(remote__exec "$host" "ls /boot/vmlinuz-* | sort -V | tail -1 | sed 's|/boot/vmlinuz-||'")
+    current_kver=$(remote__exec "$host" "uname -r")
+
+    if [ "$new_kver" = "$current_kver" ]; then
+        log "No new kernel installed — skipping DKMS verification"
+    else
+        if ! tui_confirm "Kernel Update: Phase 4 of 7 (CRITICAL)" "Verify DKMS built wl.ko for new kernel $new_kver?"; then
+            _remote_kernel_update_rollback "$host" "3"
+            return 1
+        fi
+
+        local dkms_status
+        dkms_status=$(remote__exec "$host" "dkms status broadcom-sta/6.30.223.271 -k $new_kver 2>/dev/null")
+
+        if ! echo "$dkms_status" | grep -q "installed"; then
+            log "DKMS did not auto-build for $new_kver — building manually..."
+            if ! remote_driver_rebuild "$host" "$new_kver"; then
+                error "DKMS build FAILED for kernel $new_kver"
+                tui_msgbox "CRITICAL: DKMS Build Failed" "The WiFi driver cannot compile for kernel $new_kver.\n\nDO NOT REBOOT into this kernel.\n\nRolling back now..."
+                _remote_kernel_update_rollback "$host" "3"
+                return 1
+            fi
+        fi
+
+        local wl_path
+        wl_path=$(remote__exec "$host" "ls /lib/modules/$new_kver/updates/dkms/wl.ko /lib/modules/$new_kver/extra/wl.ko 2>/dev/null | head -1")
+        if [ -z "$wl_path" ]; then
+            error "wl.ko NOT FOUND for kernel $new_kver"
+            _remote_kernel_update_rollback "$host" "3"
+            return 1
+        fi
+        log "wl.ko verified at $wl_path"
+
+        remote__exec "$host" "sudo update-initramfs -u -k $new_kver"
+    fi
+    remote__exec "$host" "echo 'KUPDATE_PHASE=4' > /tmp/macpro-kernel-update.env"
+    log "Phase 4 complete: DKMS verified"
+
+    if ! tui_confirm "Kernel Update: Phase 5 of 7" "Configure GRUB fallback so old kernel is default?"; then
+        _remote_kernel_update_rollback "$host" "4"
+        return 1
+    fi
+    remote__exec "$host" "sudo sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT=saved/' /etc/default/grub"
+    remote__exec "$host" "grep -q '^GRUB_SAVEDEFAULT' /etc/default/grub || echo 'GRUB_SAVEDEFAULT=true' | sudo tee -a /etc/default/grub"
+    remote__exec "$host" "sudo grub-set-default 'Ubuntu, with Linux $current_kver'"
+    remote__exec "$host" "sudo update-grub"
+    local saved_default
+    saved_default=$(remote__exec "$host" "sudo grub-editenv list 2>/dev/null" || true)
+    log "GRUB saved default: $saved_default"
+    remote__exec "$host" "echo 'KUPDATE_PHASE=5' > /tmp/macpro-kernel-update.env"
+    log "Phase 5 complete: GRUB fallback configured"
+
+    if ! tui_confirm "Kernel Update: Phase 6 of 7" "Reboot into new kernel $new_kver? Power cycle returns to $current_kver if it fails."; then
+        _remote_kernel_update_rollback "$host" "5"
+        return 1
+    fi
+    remote__exec "$host" "sudo grub-reboot 'Ubuntu, with Linux $new_kver'"
+    remote_reboot "$host"
+    remote__exec "$host" "echo 'KUPDATE_PHASE=6' > /tmp/macpro-kernel-update.env"
+    log "Phase 6 complete: rebooted into new kernel"
+
+    if ! tui_confirm "Kernel Update: Phase 7 of 7" "Re-lock the system (pin kernel, disable apt sources, re-enable holds)?"; then
+        log "WARNING: System left unlocked — manual re-lock required"
+        return 0
+    fi
+    remote_pin_kernel "$host"
+    remote_toggle_apt_sources "$host" disable
+    remote__exec "$host" "rm -f /tmp/macpro-kernel-update.env"
+
+    log "Kernel update complete!"
+    return 0
+}
+
+_remote_kernel_update_rollback() {
+    local host="$1"
+    local from_phase="${2:-0}"
+
+    error "Kernel update failed — rolling back from phase $from_phase..."
+
+    case "$from_phase" in
+        0|1)
+            remote_toggle_apt_sources "$host" disable 2>/dev/null || true
+            ;;
+        2|3)
+            remote_pin_kernel "$host" 2>/dev/null || true
+            remote_toggle_apt_sources "$host" disable 2>/dev/null || true
+            ;;
+        4)
+            remote_pin_kernel "$host" 2>/dev/null || true
+            remote_toggle_apt_sources "$host" disable 2>/dev/null || true
+            warn "New kernel is installed but NOT verified. Do NOT reboot into it."
+            ;;
+        5)
+            remote__exec "$host" "sudo grub-set-default 0" 2>/dev/null || true
+            remote__exec "$host" "sudo update-grub" 2>/dev/null || true
+            remote_pin_kernel "$host" 2>/dev/null || true
+            remote_toggle_apt_sources "$host" disable 2>/dev/null || true
+            ;;
+    esac
+
+    remote__exec "$host" "rm -f /tmp/macpro-kernel-update.env" 2>/dev/null || true
+    log "Rollback complete — system should be in pre-update state"
 }
 
 remote_non_kernel_update() {
@@ -220,19 +395,33 @@ remote_non_kernel_update() {
         return 1
     fi
 
+    local failed=0
+
     log "Enabling apt sources on $host..."
     remote__exec "$host" "sudo sed -i 's/^#deb/deb/' /etc/apt/sources.list"
-    remote__exec "$host" "for list in /etc/apt/sources.list.d/*.list; do [ -f \"\$list\" ] && sudo sed -i 's/^#deb/deb/' \"\$list\"; done"
+    remote__exec "$host" "for list in /etc/apt/sources.list.d/*.list; do [ -f \"\$list\" ] \&\& sudo sed -i 's/^#deb/deb/' \"\$list\"; done"
 
     log "Running apt-get update..."
-    remote__exec "$host" "sudo apt-get update" || { error "apt-get update failed"; return 1; }
+    if ! remote__exec "$host" "sudo apt-get update"; then
+        error "apt-get update failed"
+        failed=1
+    fi
 
     log "Upgrading non-kernel packages..."
-    remote__exec "$host" "sudo apt-get upgrade -y --exclude=linux-image-*,linux-headers-*,linux-modules-*" || { error "Upgrade failed"; return 1; }
+    if [ "$failed" -eq 0 ]; then
+        if ! remote__exec "$host" "sudo apt-get upgrade -y --exclude=linux-image-*,linux-headers-*,linux-modules-*"; then
+            error "Upgrade failed"
+            failed=1
+        fi
+    fi
 
     log "Disabling apt sources..."
     remote__exec "$host" "sudo sed -i '/^deb/ s/^/#/' /etc/apt/sources.list"
-    remote__exec "$host" "for list in /etc/apt/sources.list.d/*.list; do [ -f \"\$list\" ] && sudo sed -i '/^deb/ s/^/#/' \"\$list\"; done"
+    remote__exec "$host" "for list in /etc/apt/sources.list.d/*.list; do [ -f \"\$list\" ] \&\& sudo sed -i '/^deb/ s/^/#/' \"\$list\"; done"
+
+    if [ "$failed" -eq 1 ]; then
+        return 1
+    fi
 
     log "Non-kernel update completed successfully"
 }
@@ -261,9 +450,11 @@ remote_driver_status() {
 
 remote_driver_rebuild() {
     local host
+    local target_kver=""
     host=$(remote__get_host "${1:-}")
+    target_kver="${2:-}"
 
-    warn "This will rebuild the DKMS module for the current kernel"
+    warn "This will rebuild the DKMS module"
     read -rp "Type 'yes' to confirm: " confirm
     if [ "$confirm" != "yes" ]; then
         log "Operation cancelled"
@@ -273,17 +464,46 @@ remote_driver_rebuild() {
     log "Rebuilding DKMS module on $host..."
 
     local kver
-    kver=$(remote__exec "$host" "uname -r") || { error "Failed to get kernel version"; return 1; }
+    if [ -n "$target_kver" ]; then
+        kver="$target_kver"
+    else
+        kver=$(remote__exec "$host" "uname -r") || { error "Failed to get kernel version"; return 1; }
+    fi
 
-    remote__exec "$host" "sudo dkms build broadcom-sta/6.30.223.271 -k $kver" || {
+    local patches_check
+    patches_check=$(remote__exec "$host" "ls /usr/src/broadcom-sta-6.30.223.271/*.patch 2>/dev/null | wc -l")
+    if [ "$patches_check" -eq 0 ]; then
+        warn "No DKMS patches found in /usr/src/broadcom-sta-6.30.223.271/"
+        warn "Build may fail on kernel 6.8+ without patches"
+    else
+        log "Found $patches_check DKMS patches"
+    fi
+
+    if ! remote__exec "$host" "sudo dkms build broadcom-sta/6.30.223.271 -k $kver"; then
         error "DKMS build failed"
-        return 1
-    }
 
-    remote__exec "$host" "sudo dkms install broadcom-sta/6.30.223.271 -k $kver" || {
+        local build_log
+        build_log=$(remote__exec "$host" "cat /var/lib/dkms/broadcom-sta/6.30.223.271/build/make.log 2>/dev/null | tail -20" || echo "Build log not available")
+        error "Build log (last 20 lines): $build_log"
+
+        if [ "$patches_check" -eq 0 ]; then
+            error "DKMS patches not found — cannot build wl driver"
+        fi
+        return 1
+    fi
+
+    if ! remote__exec "$host" "sudo dkms install broadcom-sta/6.30.223.271 -k $kver"; then
         error "DKMS install failed"
         return 1
-    }
+    fi
+
+    local dkms_status
+    dkms_status=$(remote__exec "$host" "dkms status broadcom-sta/6.30.223.271 -k $kver")
+    if ! echo "$dkms_status" | grep -q "installed"; then
+        error "DKMS module not showing as installed"
+        return 1
+    fi
+    log "DKMS status verified: $dkms_status"
 
     remote__exec "$host" "sudo modprobe wl" || {
         error "Failed to load wl module"
@@ -334,18 +554,48 @@ remote_erase_macos() {
 
     warn "Starting macOS partition erasure..."
 
-    remote__exec "$host" "sudo sgdisk -b /tmp/gpt-backup-\$(date +%Y%m%d%H%M%S).bin /dev/sda" || {
+    local backup_timestamp
+    backup_timestamp=$(date +%Y%m%d%H%M%S)
+
+    remote__exec "$host" "sudo sgdisk -b /tmp/gpt-backup-${backup_timestamp}.bin /dev/sda" || {
         error "Failed to backup GPT"
         return 1
     }
+    log "GPT backup saved to /tmp/gpt-backup-${backup_timestamp}.bin on remote host"
 
-    log "GPT backup saved on remote host"
-    warn "Now deleting macOS partitions one at a time..."
-    warn "You must identify partition numbers manually from the output above"
-    echo ""
-    error "Manual intervention required: SSH to $host and follow Post-Install.md Operation 1"
-    error "This automated function stops here for safety."
-    return 1
+    remote__exec "$host" "sudo sgdisk -p /dev/sda > /tmp/gpt-layout-${backup_timestamp}.txt" || {
+        warn "Failed to save GPT layout text dump"
+    }
+
+    local apfs_partitions delete_partitions
+    apfs_partitions=$(remote__exec "$host" "lsblk -o NAME,FSTYPE /dev/sda | grep -i apfs | awk '{print \$1}' | sed 's/^..//'") || true
+
+    if [ -z "$apfs_partitions" ]; then
+        warn "No APFS partitions found to delete"
+    else
+        for part in $apfs_partitions; do
+            log "Deleting APFS partition /dev/sda${part}..."
+            remote__exec "$host" "sudo umount /dev/sda${part} 2>/dev/null || true"
+            if remote__exec "$host" "sudo sgdisk -d ${part} /dev/sda"; then
+                log "Partition /dev/sda${part} deleted successfully"
+            else
+                error "Failed to delete partition /dev/sda${part}"
+                warn "Manual intervention required. Restore GPT with: sgdisk -l /tmp/gpt-backup-*.bin /dev/sda"
+                return 1
+            fi
+        done
+    fi
+
+    log "macOS partitions erased successfully"
+
+    local new_layout
+    new_layout=$(remote__exec "$host" "sudo sgdisk -p /dev/sda") || true
+    log "New partition layout:"
+    echo "$new_layout"
+
+    log "To expand Ubuntu partition, use: sudo growpart /dev/sda <partition_num> && sudo resize2fs /dev/sda<partition_num>"
+
+    return 0
 }
 
 ## APT Source Management
@@ -461,23 +711,95 @@ remote_reboot() {
     remote__exec "$host" "sudo reboot" || true
 
     log "Reboot command sent. Waiting for host to go down..."
-    sleep 5
+    sleep 10
+
+    log "Waiting for $host to come back online..."
 
     local attempts=0
-    local max_attempts=30
+    local max_attempts=60
 
     while [ $attempts -lt $max_attempts ]; do
-        if remote_test_connection "$host" 2>/dev/null; then
-            log "Host is back online"
-            remote_health_check "$host"
-            return 0
-        fi
-        echo "  Waiting for $host to come back... ($attempts/$max_attempts)"
-        sleep 10
         attempts=$((attempts + 1))
+
+        if command -v retry_ssh >/dev/null 2>&1; then
+            if retry_ssh "$host" "echo 'SSH is up'" 2>/dev/null; then
+                log "Host is back online (after $((attempts * 5)) seconds)"
+                remote_health_check "$host"
+                return 0
+            fi
+        else
+            if remote_test_connection "$host" 2>/dev/null; then
+                log "Host is back online (after $((attempts * 5)) seconds)"
+                remote_health_check "$host"
+                return 0
+            fi
+        fi
+
+        if [ $((attempts % 6)) -eq 0 ]; then
+            log "  Still waiting... ($((attempts / 6)) minutes elapsed)"
+        fi
+        sleep 5
     done
 
     error "Host did not come back online within timeout"
+    return 1
+}
+
+remote_rollback_status() {
+    local host
+    host=$(remote__get_host "${1:-}")
+
+    log "Checking for incomplete kernel update on $host..."
+
+    local phase_file phase
+    phase_file="/tmp/macpro-kernel-update.env"
+    phase=$(remote__exec "$host" "cat $phase_file 2>/dev/null || echo 'NOT_FOUND'")
+
+    if [ "$phase" = "NOT_FOUND" ]; then
+        log "No incomplete kernel update found"
+        return 0
+    fi
+
+    local phase_num
+    phase_num=$(echo "$phase" | grep -oE '[0-9]+' | head -1)
+
+    error "INCOMPLETE KERNEL UPDATE DETECTED"
+    error "Update stopped at phase $phase_num of 7"
+
+    echo ""
+    echo "Recovery actions:"
+    case "$phase_num" in
+        1)
+            echo "  - Phase 1: Only apt sources enabled"
+            echo "  - Action: remote_toggle_apt_sources $host disable"
+            ;;
+        2)
+            echo "  - Phase 2: Holds removed, sources enabled"
+            echo "  - Action: remote_pin_kernel $host; remote_toggle_apt_sources $host disable"
+            ;;
+        3)
+            echo "  - Phase 3: Kernel installed, holds removed"
+            echo "  - Action: remote_pin_kernel $host; remote_toggle_apt_sources $host disable"
+            echo "  - Check: dkms status broadcom-sta for current kernel"
+            ;;
+        4)
+            echo "  - Phase 4: DKMS verified for new kernel"
+            echo "  - Action: Reboot into new kernel or roll back GRUB default"
+            echo "  - Check: ls /lib/modules/\$(uname -r)/updates/dkms/wl.ko"
+            ;;
+        5)
+            echo "  - Phase 5: GRUB fallback configured"
+            echo "  - Action: remote__exec $host 'sudo grub-reboot \u003cdesired_kernel\u003e'"
+            ;;
+        6)
+            echo "  - Phase 6: Rebooted into new kernel"
+            echo "  - Action: Complete phase 7 manually (pin kernel, disable sources)"
+            echo "  - Then: rm $phase_file"
+            ;;
+    esac
+    echo ""
+    echo "To rollback: _remote_kernel_update_rollback $host $phase_num"
+
     return 1
 }
 

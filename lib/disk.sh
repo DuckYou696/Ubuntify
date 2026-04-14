@@ -153,14 +153,14 @@ create_esp_partition() {
     EXISTING_ESP=$(diskutil list "$INTERNAL_DISK" 2>/dev/null | grep "$ESP_NAME" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
     if [ -n "$EXISTING_ESP" ]; then
         log "Removing existing $ESP_NAME partition /dev/$EXISTING_ESP..."
-        diskutil unmount "/dev/$EXISTING_ESP" 2>/dev/null || true
-        diskutil eraseVolume free none "/dev/$EXISTING_ESP" 2>/dev/null || warn "Could not remove existing ESP"
+        retry_diskutil unmount "/dev/$EXISTING_ESP" 2>/dev/null || true
+        retry_diskutil eraseVolume free none "/dev/$EXISTING_ESP" 2>/dev/null || warn "Could not remove existing ESP"
         sleep 1
     fi
 
     local BEFORE_PARTS AFTER_PARTS ESP_DEVICE ESP_MOUNT
     BEFORE_PARTS=$(diskutil list "$INTERNAL_DISK" | grep -oE 'disk[0-9]+s[0-9]+' | sort)
-    diskutil addPartition "$INTERNAL_DISK" %C12A7328-F81F-11D2-BA4B-00A0C93EC93B% %noformat% "$ESP_SIZE" || \
+    retry_diskutil addPartition "$INTERNAL_DISK" %C12A7328-F81F-11D2-BA4B-00A0C93EC93B% %noformat% "$ESP_SIZE" || \
         die "Failed to create ESP partition with EFI System Partition type"
     eval "$_esp_created_name=1"
     sleep 2
@@ -177,7 +177,7 @@ create_esp_partition() {
     sleep 1
 
     # Mount the freshly formatted ESP
-    diskutil mount "/dev/$_esp_device_val" 2>/dev/null || true
+    retry_diskutil mount "/dev/$_esp_device_val" 2>/dev/null || true
     ESP_MOUNT="/Volumes/$ESP_NAME"
     if [ ! -d "$ESP_MOUNT" ]; then
         ESP_MOUNT=$(diskutil info "/dev/$_esp_device_val" 2>/dev/null | grep "Mount Point" | awk '{$1=$2=""; print substr($0,3)}' | sed 's/^[[:space:]]*//' || true)
@@ -212,7 +212,7 @@ extract_iso_to_esp() {
     fi
 
     log "Extracting ISO to ESP via xorriso (this may take a minute)..."
-    xorriso -osirrox on -indev "$ISO_PATH" \
+    retry_xorriso -osirrox on -indev "$ISO_PATH" \
         -extract / "$ESP_MOUNT" 2>/dev/null || \
         die "Failed to extract ISO contents"
 

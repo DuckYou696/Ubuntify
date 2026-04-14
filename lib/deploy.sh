@@ -15,6 +15,9 @@ source "${LIB_DIR:-./lib}/detect.sh"
 source "${LIB_DIR:-./lib}/disk.sh"
 source "${LIB_DIR:-./lib}/autoinstall.sh"
 source "${LIB_DIR:-./lib}/bless.sh"
+source "${LIB_DIR:-./lib}/retry.sh" 2>/dev/null || true
+source "${LIB_DIR:-./lib}/verify.sh" 2>/dev/null || true
+source "${LIB_DIR:-./lib}/rollback.sh" 2>/dev/null || true
 
 SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "$0")" && pwd)}"
 STORAGE_LAYOUT="${STORAGE_LAYOUT:-1}"
@@ -22,6 +25,145 @@ NETWORK_TYPE="${NETWORK_TYPE:-1}"
 INTERNAL_DISK="${INTERNAL_DISK:-}"
 APFS_CONTAINER="${APFS_CONTAINER:-}"
 TARGET_DEVICE="${TARGET_DEVICE:-}"
+
+# Internal partition deployment phase functions
+# These correspond to PHASES_INTERNAL="analyze shrink_apfs create_esp extract_iso copy_pkgs generate_config verify_bless"
+
+_phase_analyze() {
+    analyze_disk_layout INTERNAL_DISK APFS_CONTAINER
+    snapshot_disk_layout "$INTERNAL_DISK"
+    journal_save_originals APFS_SIZE "${_APFS_ORIGINAL_SIZE:-}" INTERNAL_DISK "$INTERNAL_DISK" APFS_CONTAINER "$APFS_CONTAINER"
+}
+
+_phase_shrink_apfs() {
+    shrink_apfs_if_needed "$APFS_CONTAINER" "$INTERNAL_DISK" _APFS_RESIZED _APFS_ORIGINAL_SIZE
+    journal_set "APFS_RESIZED" "$_APFS_RESIZED"
+    journal_set "ORIGINAL_APFS_SIZE" "${_APFS_ORIGINAL_SIZE:-}"
+    if [ "$_APFS_RESIZED" -eq 1 ] && [ -n "${_APFS_ORIGINAL_SIZE:-}" ]; then
+        local TARGET_MACOS_GB
+        TARGET_MACOS_GB=$(echo "$_APFS_ORIGINAL_SIZE" | awk '{print int($1)}')
+        if ! verify_apfs_resize "$APFS_CONTAINER" "$TARGET_MACOS_GB"; then
+            warn "APFS resize verification failed (expected ~${TARGET_MACOS_GB}GB), but continuing"
+        fi
+    fi
+}
+
+_phase_create_esp() {
+    local ESP_MOUNT
+    ESP_MOUNT=$(create_esp_partition "$INTERNAL_DISK" _ESP_CREATED _ESP_DEVICE)
+    journal_set "ESP_CREATED" "$_ESP_CREATED"
+    journal_set "ESP_DEVICE" "${_ESP_DEVICE:-}"
+    export ESP_MOUNT
+    if ! verify_esp_mount "$ESP_MOUNT"; then
+        warn "ESP mount verification failed, attempting self-heal..."
+        local attempt=1
+        while [ "$attempt" -le 3 ]; do
+            retry_diskutil mount "/dev/$_ESP_DEVICE" 2>/dev/null || true
+            sleep 2
+            if verify_esp_mount "$ESP_MOUNT"; then
+                log "ESP mount successful after retry $attempt"
+                return 0
+            fi
+            attempt=$((attempt + 1))
+        done
+        error "ESP mount verification failed after self-heal attempts"
+        return 1
+    fi
+}
+
+_phase_extract_iso() {
+    local ESP_MOUNT="/Volumes/${ESP_NAME:-CIDATA}"
+    if [ -n "${1:-}" ]; then
+        ESP_MOUNT="$1"
+    fi
+    retry_xorriso -osirrox on -indev "$ISO_PATH" -extract / "$ESP_MOUNT" 2>/dev/null || die "Failed to extract ISO contents"
+    if ! verify_iso_extraction "$ESP_MOUNT"; then
+        warn "ISO extraction verification failed, cleaning and retrying..."
+        rm -rf "${ESP_MOUNT:?}"/* 2>/dev/null || true
+        retry_xorriso -osirrox on -indev "$ISO_PATH" -extract / "$ESP_MOUNT" 2>/dev/null || die "Failed to extract ISO contents (retry)"
+        if ! verify_iso_extraction "$ESP_MOUNT"; then
+            error "ISO extraction verification failed after retry"
+            return 1
+        fi
+    fi
+}
+
+_phase_copy_pkgs() {
+    local ESP_MOUNT="/Volumes/${ESP_NAME:-CIDATA}"
+    if [ -n "${1:-}" ]; then
+        ESP_MOUNT="$1"
+    fi
+    local pkgs_copied=0
+    if ! ls "$ESP_MOUNT/macpro-pkgs/"*.deb 1>/dev/null 2>&1; then
+        log "Copying driver packages to ESP..."
+        mkdir -p "$ESP_MOUNT/macpro-pkgs"
+        cp "$SCRIPT_DIR/packages/"*.deb "$ESP_MOUNT/macpro-pkgs/" 2>/dev/null && pkgs_copied=1 || warn "Some packages may be missing"
+    fi
+    if [ -d "$SCRIPT_DIR/packages/dkms-patches" ] && [ ! -d "$ESP_MOUNT/macpro-pkgs/dkms-patches" ]; then
+        mkdir -p "$ESP_MOUNT/macpro-pkgs/dkms-patches"
+        cp "$SCRIPT_DIR/packages/dkms-patches/"* "$ESP_MOUNT/macpro-pkgs/dkms-patches/" 2>/dev/null && pkgs_copied=1 || true
+    fi
+    # Verify files exist after copy
+    if [ "$pkgs_copied" -eq 1 ] && ! ls "$ESP_MOUNT/macpro-pkgs/"*.deb 1>/dev/null 2>&1; then
+        error "Package verification failed: no .deb files found after copy"
+        return 1
+    fi
+}
+
+_phase_generate_config() {
+    local ESP_MOUNT="/Volumes/${ESP_NAME:-CIDATA}"
+    if [ -n "${1:-}" ]; then
+        ESP_MOUNT="$1"
+    fi
+    local STORAGE_TYPE_ARG="dualboot"
+    local NETWORK_TYPE_ARG="wifi"
+    [ "${STORAGE_LAYOUT:-1}" = "2" ] && STORAGE_TYPE_ARG="fulldisk"
+    [ "${NETWORK_TYPE:-1}" = "2" ] && NETWORK_TYPE_ARG="ethernet"
+    generate_autoinstall "$ESP_MOUNT/autoinstall.yaml" "$STORAGE_TYPE_ARG" "$NETWORK_TYPE_ARG"
+    log "Creating cidata structure..."
+    mkdir -p "$ESP_MOUNT/cidata"
+    if [ "${STORAGE_LAYOUT:-1}" = "1" ]; then
+        generate_dualboot_storage "$ESP_MOUNT/autoinstall.yaml" "$ESP_MOUNT/cidata/user-data" "$INTERNAL_DISK"
+    else
+        cp "$ESP_MOUNT/autoinstall.yaml" "$ESP_MOUNT/cidata/user-data"
+    fi
+    # Validate preserve entries for dual-boot
+    if [ "${STORAGE_LAYOUT:-1}" = "1" ]; then
+        if ! grep -q 'preserve: true' "$ESP_MOUNT/cidata/user-data" 2>/dev/null; then
+            die "Generated user-data lacks preserve:true entries — macOS partitions would be wiped"
+        fi
+        local PRESERVE_COUNT
+        PRESERVE_COUNT=$(grep -c 'preserve: true' "$ESP_MOUNT/cidata/user-data" 2>/dev/null || echo "0")
+        log "Preserve entries in user-data: $PRESERVE_COUNT"
+    fi
+    [ -f "$ESP_MOUNT/cidata/meta-data" ] || echo "instance-id: macpro-linux-i1" > "$ESP_MOUNT/cidata/meta-data"
+    [ -f "$ESP_MOUNT/cidata/vendor-data" ] || touch "$ESP_MOUNT/cidata/vendor-data"
+    write_grub_config "$ESP_MOUNT"
+    # Verification
+    if ! verify_cidata_structure "$ESP_MOUNT"; then
+        error "CIDATA structure verification failed"
+        return 1
+    fi
+    if ! verify_yaml_syntax "$ESP_MOUNT/autoinstall.yaml"; then
+        error "YAML syntax verification failed for autoinstall.yaml"
+        return 1
+    fi
+}
+
+_phase_verify_bless() {
+    local ESP_MOUNT="/Volumes/${ESP_NAME:-CIDATA}"
+    if [ -n "${1:-}" ]; then
+        ESP_MOUNT="$1"
+    fi
+    verify_esp_contents "$ESP_MOUNT"
+    local BLESS_OK
+    BLESS_OK=$(attempt_bless "$ESP_MOUNT" "${_ESP_DEVICE:-}")
+    if ! verify_bless_result "$ESP_MOUNT"; then
+        warn "Bless verification failed — manual boot selection required"
+        log "Recovery Mode workaround: boot to Recovery (Cmd+R), run 'csrutil enable --without nvram', then retry"
+    fi
+    return 0
+}
 
 preflight_checks() {
     log "Running preflight checks..."
@@ -63,84 +205,41 @@ deploy_internal_partition() {
         return 0
     fi
 
+    journal_init "1" || die "Cannot initialize deployment journal"
+
+    # State vars (global for rollback access)
     _ESP_CREATED=0
     _APFS_RESIZED=0
     _APFS_ORIGINAL_SIZE=""
     _ESP_DEVICE=""
+
+    export _ESP_CREATED _APFS_RESIZED _APFS_ORIGINAL_SIZE _ESP_DEVICE
 
     local ISO_PATH
     ISO_PATH=$(detect_iso)
     log "Using ISO: $ISO_PATH"
 
     preflight_checks
-    analyze_disk_layout INTERNAL_DISK APFS_CONTAINER
-    shrink_apfs_if_needed "$APFS_CONTAINER" "$INTERNAL_DISK" _APFS_RESIZED _APFS_ORIGINAL_SIZE
 
-    local ESP_MOUNT
-    ESP_MOUNT=$(create_esp_partition "$INTERNAL_DISK" _ESP_CREATED _ESP_DEVICE)
-    log "ESP mounted at: $ESP_MOUNT"
+    run_phased "1" "$PHASES_INTERNAL" \
+        _phase_analyze \
+        _phase_shrink_apfs \
+        _phase_create_esp \
+        _phase_extract_iso \
+        _phase_copy_pkgs \
+        _phase_generate_config \
+        _phase_verify_bless
 
-    export _ESP_CREATED _APFS_RESIZED _APFS_ORIGINAL_SIZE _ESP_DEVICE
+    local phased_result=$?
 
-    extract_iso_to_esp "$ISO_PATH" "$ESP_MOUNT"
-
-    # Copy driver packages if not present
-    if ! ls "$ESP_MOUNT/macpro-pkgs/"*.deb 1>/dev/null 2>&1; then
-        log "Copying driver packages to ESP..."
-        mkdir -p "$ESP_MOUNT/macpro-pkgs"
-        cp "$SCRIPT_DIR/packages/"*.deb "$ESP_MOUNT/macpro-pkgs/" 2>/dev/null || warn "Some packages may be missing"
-    fi
-
-    if [ -d "$SCRIPT_DIR/packages/dkms-patches" ] && [ ! -d "$ESP_MOUNT/macpro-pkgs/dkms-patches" ]; then
-        mkdir -p "$ESP_MOUNT/macpro-pkgs/dkms-patches"
-        cp "$SCRIPT_DIR/packages/dkms-patches/"* "$ESP_MOUNT/macpro-pkgs/dkms-patches/" 2>/dev/null || true
-    fi
-
-    # Generate autoinstall.yaml based on selections
-    local STORAGE_TYPE_ARG="dualboot"
-    local NETWORK_TYPE_ARG="wifi"
-    [ "$STORAGE_LAYOUT" = "2" ] && STORAGE_TYPE_ARG="fulldisk"
-    [ "$NETWORK_TYPE" = "2" ] && NETWORK_TYPE_ARG="ethernet"
-    generate_autoinstall "$ESP_MOUNT/autoinstall.yaml" "$STORAGE_TYPE_ARG" "$NETWORK_TYPE_ARG"
-
-    # Create cidata structure
-    log "Creating cidata structure..."
-    mkdir -p "$ESP_MOUNT/cidata"
-
-    if [ "$STORAGE_LAYOUT" = "1" ]; then
-        # Dual-boot: generate dynamic storage config
-        generate_dualboot_storage "$ESP_MOUNT/autoinstall.yaml" "$ESP_MOUNT/cidata/user-data" "$INTERNAL_DISK"
-    else
-        # Full-disk: use template as-is
-        cp "$ESP_MOUNT/autoinstall.yaml" "$ESP_MOUNT/cidata/user-data"
-    fi
-
-    # Validate preserve entries for dual-boot
-    if [ "$STORAGE_LAYOUT" = "1" ]; then
-        if ! grep -q 'preserve: true' "$ESP_MOUNT/cidata/user-data" 2>/dev/null; then
-            die "Generated user-data lacks preserve:true entries — macOS partitions would be wiped"
-        fi
-        local PRESERVE_COUNT
-        PRESERVE_COUNT=$(grep -c 'preserve: true' "$ESP_MOUNT/cidata/user-data" 2>/dev/null || echo "0")
-        log "Preserve entries in user-data: $PRESERVE_COUNT"
-    fi
-
-    [ -f "$ESP_MOUNT/cidata/meta-data" ] || echo "instance-id: macpro-linux-i1" > "$ESP_MOUNT/cidata/meta-data"
-    [ -f "$ESP_MOUNT/cidata/vendor-data" ] || touch "$ESP_MOUNT/cidata/vendor-data"
-
-    write_grub_config "$ESP_MOUNT"
-    verify_esp_contents "$ESP_MOUNT"
-
-    # Attempt bless
-    local BLESS_OK
-    BLESS_OK=$(attempt_bless "$ESP_MOUNT" "$_ESP_DEVICE")
-
-    if [ "$BLESS_OK" -eq 0 ]; then
-        warn "All automated boot device methods failed (SIP blocks NVRAM writes)"
-        show_blind_boot_instructions
-    else
+    if [ $phased_result -eq 0 ]; then
+        journal_destroy
+        log "Deployment complete!"
+        log "Boot selection: Hold Option key at startup, select CIDATA"
         show_success_instructions
     fi
+
+    return $phased_result
 }
 
 deploy_usb() {
@@ -156,6 +255,8 @@ deploy_usb() {
         return 0
     fi
 
+    journal_init "2" || die "Cannot initialize deployment journal"
+
     if [ -z "${INTERNAL_DISK:-}" ]; then
         analyze_disk_layout INTERNAL_DISK APFS_CONTAINER
     fi
@@ -163,86 +264,96 @@ deploy_usb() {
     local ISO_PATH
     ISO_PATH=$(detect_iso)
     log "Using ISO: $ISO_PATH"
+    export ISO_PATH
 
-    select_usb_device TARGET_DEVICE
+    run_phased "2" "$PHASES_USB" \
+        _phase_detect_usb \
+        _phase_partition_usb \
+        _phase_extract_iso_usb \
+        _phase_copy_pkgs_usb \
+        _phase_generate_config_usb \
+        _phase_verify_usb
 
-    if ! diskutil info "$TARGET_DEVICE" 2>/dev/null | grep -qi "removable\|external\|usb"; then
-        echo ""
-        warn "WARNING: $TARGET_DEVICE does not appear to be a USB/removable device!"
-        warn "Writing to an internal device could DESTROY all data on it."
-        echo ""
-        read -rp "Type 'I UNDERSTAND THE RISK' to continue, or anything else to cancel: " confirm_usb
-        if [ "$confirm_usb" != "I UNDERSTAND THE RISK" ]; then
-            die "Deployment cancelled — target device does not appear to be removable"
+    local phased_result=$?
+
+    if [ $phased_result -eq 0 ]; then
+        journal_destroy
+        log "USB deployment complete!"
+        show_usb_instructions
+    fi
+
+    return $phased_result
+}
+
+# VM test deployment phase functions
+# These correspond to PHASES_VM="check_vbox find_iso build_iso create_vm start_monitor"
+
+_phase_check_vbox() {
+    if ! command -v VBoxManage >/dev/null 2>&1; then
+        die "VirtualBox not found. Install from https://www.virtualbox.org/ or: brew install --cask virtualbox"
+    fi
+    journal_set "VBOX_AVAILABLE" "yes"
+}
+
+_phase_find_iso() {
+    local BASE_ISO=""
+    for loc in "$SCRIPT_DIR"/prereqs/ubuntu-24.04*.iso "$HOME"/Downloads/ubuntu-24.04*.iso; do
+        if [ -f "$loc" ]; then
+            BASE_ISO="$loc"
+            break
+        fi
+    done
+    if [ -z "$BASE_ISO" ]; then
+        die "Stock Ubuntu Server ISO not found in prereqs/. Download from https://ubuntu.com/download/server"
+    fi
+    log "Using base ISO: $BASE_ISO"
+    export BASE_ISO
+    journal_set "BASE_ISO" "$BASE_ISO"
+}
+
+_phase_build_iso() {
+    local VM_DIR="$SCRIPT_DIR/vm-test"
+    local VM_ISO="$VM_DIR/ubuntu-vmtest.iso"
+    export VM_ISO
+    if [ ! -f "$VM_ISO" ]; then
+        log "Building VM test ISO..."
+        sudo "$VM_DIR/build-iso-vm.sh" || die "VM ISO build failed"
+    else
+        log "VM test ISO already exists: $VM_ISO"
+        read -rp "Rebuild? (y/N): " rebuild
+        if [ "$rebuild" = "y" ] || [ "$rebuild" = "Y" ]; then
+            sudo "$VM_DIR/build-iso-vm.sh" || die "VM ISO build failed"
         fi
     fi
+    [ -f "$VM_ISO" ] || die "VM test ISO not found after build"
+    journal_set "VM_ISO" "$VM_ISO"
+}
 
-    log "Preparing USB device $TARGET_DEVICE..."
-
-    # Unmount the device
-    diskutil unmountDisk "$TARGET_DEVICE" 2>/dev/null || true
-    sleep 2
-
-    # Create GPT partition table and FAT32 partition
-    log "Creating FAT32 partition on USB..."
-    diskutil partitionDisk "$TARGET_DEVICE" GPT FAT32 "CIDATA" 100% 2>/dev/null || \
-        die "Failed to partition USB device"
-
-    # Find the new partition
-    sleep 2
-    local USB_PARTITION
-    USB_PARTITION=$(diskutil list "$TARGET_DEVICE" | grep "CIDATA" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
-    [ -n "$USB_PARTITION" ] || die "Cannot identify USB partition"
-
-    # Mount it
-    diskutil mount "/dev/$USB_PARTITION" 2>/dev/null || true
-    local USB_MOUNT="/Volumes/CIDATA"
-    [ -d "$USB_MOUNT" ] || die "USB not mounted after format"
-
-    log "USB mounted at: $USB_MOUNT"
-
-    # Extract ISO contents
-    extract_iso_to_esp "$ISO_PATH" "$USB_MOUNT"
-
-    # Copy driver packages
-    if ! ls "$USB_MOUNT/macpro-pkgs/"*.deb 1>/dev/null 2>&1; then
-        log "Copying driver packages to USB..."
-        mkdir -p "$USB_MOUNT/macpro-pkgs"
-        cp "$SCRIPT_DIR/packages/"*.deb "$USB_MOUNT/macpro-pkgs/" 2>/dev/null || warn "Some packages may be missing"
-    fi
-
-    if [ -d "$SCRIPT_DIR/packages/dkms-patches" ] && [ ! -d "$USB_MOUNT/macpro-pkgs/dkms-patches" ]; then
-        mkdir -p "$USB_MOUNT/macpro-pkgs/dkms-patches"
-        cp "$SCRIPT_DIR/packages/dkms-patches/"* "$USB_MOUNT/macpro-pkgs/dkms-patches/" 2>/dev/null || true
-    fi
-
-    # Generate autoinstall.yaml
-    local STORAGE_TYPE_ARG="dualboot"
-    local NETWORK_TYPE_ARG="wifi"
-    [ "$STORAGE_LAYOUT" = "2" ] && STORAGE_TYPE_ARG="fulldisk"
-    [ "$NETWORK_TYPE" = "2" ] && NETWORK_TYPE_ARG="ethernet"
-    generate_autoinstall "$USB_MOUNT/autoinstall.yaml" "$STORAGE_TYPE_ARG" "$NETWORK_TYPE_ARG"
-
-    # Create cidata structure
-    log "Creating cidata structure..."
-    mkdir -p "$USB_MOUNT/cidata"
-
-    if [ "$STORAGE_LAYOUT" = "1" ]; then
-        generate_dualboot_storage "$USB_MOUNT/autoinstall.yaml" "$USB_MOUNT/cidata/user-data" "$INTERNAL_DISK"
+_phase_create_vm() {
+    local VM_DIR="$SCRIPT_DIR/vm-test"
+    local VM_ISO="${1:-$VM_DIR/ubuntu-vmtest.iso}"
+    local VM_NAME="macpro-vmtest"
+    export VM_NAME
+    if VBoxManage list vms 2>/dev/null | grep -q "\"$VM_NAME\""; then
+        log "VM '$VM_NAME' already exists"
+        read -rp "Recreate? (y/N): " recreate
+        if [ "$recreate" = "y" ] || [ "$recreate" = "Y" ]; then
+            "$VM_DIR/create-vm.sh" --force || die "VM creation failed"
+        fi
     else
-        cp "$USB_MOUNT/autoinstall.yaml" "$USB_MOUNT/cidata/user-data"
+        log "Creating VirtualBox VM..."
+        "$VM_DIR/create-vm.sh" || die "VM creation failed"
     fi
+    journal_set "VM_CREATED" "yes"
+}
 
-    [ -f "$USB_MOUNT/cidata/meta-data" ] || echo "instance-id: macpro-linux-i1" > "$USB_MOUNT/cidata/meta-data"
-    [ -f "$USB_MOUNT/cidata/vendor-data" ] || touch "$USB_MOUNT/cidata/vendor-data"
-
-    write_grub_config "$USB_MOUNT"
-    verify_esp_contents "$USB_MOUNT"
-
-    # Unmount USB
-    diskutil unmountDisk "$TARGET_DEVICE" 2>/dev/null || true
-
-    show_usb_instructions
+_phase_start_monitor() {
+    if ! lsof -i :8080 >/dev/null 2>&1; then
+        log "Starting monitoring server..."
+        (cd "$SCRIPT_DIR/macpro-monitor" && ./start.sh) || warn "Monitor start failed (non-critical)"
+        sleep 2
+    fi
+    journal_set "MONITOR_STARTED" "yes"
 }
 
 deploy_vm_test() {
@@ -258,68 +369,36 @@ deploy_vm_test() {
         return 0
     fi
 
-    if ! command -v VBoxManage >/dev/null 2>&1; then
-        die "VirtualBox not found. Install from https://www.virtualbox.org/ or: brew install --cask virtualbox"
-    fi
+    journal_init "4" || die "Cannot initialize deployment journal"
 
-    local BASE_ISO
-    BASE_ISO=""
-    for loc in "$SCRIPT_DIR"/prereqs/ubuntu-24.04*.iso "$HOME"/Downloads/ubuntu-24.04*.iso; do
-        if [ -f "$loc" ]; then
-            BASE_ISO="$loc"
-            break
-        fi
-    done
-    if [ -z "$BASE_ISO" ]; then
-        die "Stock Ubuntu Server ISO not found in prereqs/. Download from https://ubuntu.com/download/server"
-    fi
-    log "Using base ISO: $BASE_ISO"
+    run_phased "4" "$PHASES_VM" \
+        _phase_check_vbox \
+        _phase_find_iso \
+        _phase_build_iso \
+        _phase_create_vm \
+        _phase_start_monitor
 
-    local VM_DIR="$SCRIPT_DIR/vm-test"
-    local VM_ISO="$VM_DIR/ubuntu-vmtest.iso"
+    local phased_result=$?
 
-    if [ ! -f "$VM_ISO" ]; then
-        log "Building VM test ISO..."
-        sudo "$VM_DIR/build-iso-vm.sh" || die "VM ISO build failed"
+    if [ $phased_result -eq 0 ]; then
+        journal_destroy
+        echo ""
+        log "VM test environment ready!"
+        echo ""
+        echo "  Next steps:"
+        echo "    1. Monitor: open http://localhost:8080 in a browser"
+        echo "    2. Run test: cd vm-test \u0026\u0026 ./test-vm.sh"
+        echo "    3. SSH into VM (when ready): ssh -p 2222 teja@localhost"
+        echo "    4. Serial console log: tail -f /tmp/vmtest-serial.log"
+        echo "    5. Stop VM: cd vm-test \u0026\u0026 ./test-vm.sh stop"
+        echo "    6. Grab logs: cd vm-test \u0026\u0026 ./test-vm.sh logs"
+        echo ""
     else
-        log "VM test ISO already exists: $VM_ISO"
-        read -rp "Rebuild? (y/N): " rebuild
-        if [ "$rebuild" = "y" ] || [ "$rebuild" = "Y" ]; then
-            sudo "$VM_DIR/build-iso-vm.sh" || die "VM ISO build failed"
-        fi
+        warn "VM test deployment failed, cleaning up..."
+        rollback_vm
     fi
 
-    [ -f "$VM_ISO" ] || die "VM test ISO not found after build"
-
-    local VM_NAME="macpro-vmtest"
-    if VBoxManage list vms 2>/dev/null | grep -q "\"$VM_NAME\""; then
-        log "VM '$VM_NAME' already exists"
-        read -rp "Recreate? (y/N): " recreate
-        if [ "$recreate" = "y" ] || [ "$recreate" = "Y" ]; then
-            "$VM_DIR/create-vm.sh" --force || die "VM creation failed"
-        fi
-    else
-        log "Creating VirtualBox VM..."
-        "$VM_DIR/create-vm.sh" || die "VM creation failed"
-    fi
-
-    if ! lsof -i :8080 >/dev/null 2>&1; then
-        log "Starting monitoring server..."
-        (cd "$SCRIPT_DIR/macpro-monitor" && ./start.sh) || warn "Monitor start failed (non-critical)"
-        sleep 2
-    fi
-
-    echo ""
-    log "VM test environment ready!"
-    echo ""
-    echo "  Next steps:"
-    echo "    1. Monitor: open http://localhost:8080 in a browser"
-    echo "    2. Run test: cd vm-test && ./test-vm.sh"
-    echo "    3. SSH into VM (when ready): ssh -p 2222 teja@localhost"
-    echo "    4. Serial console log: tail -f /tmp/vmtest-serial.log"
-    echo "    5. Stop VM: cd vm-test && ./test-vm.sh stop"
-    echo "    6. Grab logs: cd vm-test && ./test-vm.sh logs"
-    echo ""
+    return $phased_result
 }
 
 deploy_manual() {
@@ -372,6 +451,9 @@ deploy_manual() {
     fi
 
     echo ""
+    warn "CRITICAL WARNING: dd writes directly to the device and ERASES all data."
+    warn "This operation has NO ROLLBACK. The USB will be completely wiped."
+    echo ""
     echo "WARNING: This will ERASE all data on $TARGET_DEVICE"
     echo "The ISO will be written directly to the device (dd style)"
     read -rp "Type 'yes' to proceed: " confirm
@@ -381,7 +463,7 @@ deploy_manual() {
 
     # Unmount and write ISO
     log "Writing ISO to USB (this may take several minutes)..."
-    diskutil unmountDisk "$TARGET_DEVICE" 2>/dev/null || true
+    retry_diskutil unmountDisk "$TARGET_DEVICE" 2>/dev/null || true
     sleep 2
 
     if ! sudo dd if="$ISO_PATH" of="$TARGET_DEVICE" bs=1m; then
@@ -391,12 +473,124 @@ deploy_manual() {
     sync
     log "ISO written successfully"
 
-    diskutil eject "$TARGET_DEVICE" 2>/dev/null || true
+    retry_diskutil eject "$TARGET_DEVICE" 2>/dev/null || true
 
     show_manual_instructions
 }
 
 # Instruction display functions
+# USB deployment phase functions
+# These correspond to PHASES_USB="detect_usb partition_usb extract_iso copy_pkgs generate_config verify"
+
+_phase_detect_usb() {
+    select_usb_device TARGET_DEVICE
+    journal_set "TARGET_DEVICE" "$TARGET_DEVICE"
+    if ! diskutil info "$TARGET_DEVICE" 2>/dev/null | grep -qi "removable\|external\|usb"; then
+        echo ""
+        warn "WARNING: $TARGET_DEVICE does not appear to be a USB/removable device!"
+        warn "Writing to an internal device could DESTROY all data on it."
+        echo ""
+        read -rp "Type 'I UNDERSTAND THE RISK' to continue, or anything else to cancel: " confirm_usb
+        if [ "$confirm_usb" != "I UNDERSTAND THE RISK" ]; then
+            die "Deployment cancelled — target device does not appear to be removable"
+        fi
+    fi
+}
+
+_phase_partition_usb() {
+    log "Preparing USB device $TARGET_DEVICE..."
+    retry_diskutil unmountDisk "$TARGET_DEVICE" 2>/dev/null || true
+    sleep 2
+    log "Creating FAT32 partition on USB..."
+    retry_diskutil partitionDisk "$TARGET_DEVICE" GPT FAT32 "CIDATA" 100% 2>/dev/null || die "Failed to partition USB device"
+    sleep 2
+    local USB_PARTITION
+    USB_PARTITION=$(diskutil list "$TARGET_DEVICE" | grep "CIDATA" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
+    [ -n "$USB_PARTITION" ] || die "Cannot identify USB partition"
+    retry_diskutil mount "/dev/$USB_PARTITION" 2>/dev/null || true
+    local USB_MOUNT="/Volumes/CIDATA"
+    [ -d "$USB_MOUNT" ] || die "USB not mounted after format"
+    log "USB mounted at: $USB_MOUNT"
+    export USB_MOUNT
+}
+
+_phase_extract_iso_usb() {
+    local USB_MOUNT="/Volumes/CIDATA"
+    if [ -n "${1:-}" ]; then
+        USB_MOUNT="$1"
+    fi
+    retry_xorriso -osirrox on -indev "$ISO_PATH" -extract / "$USB_MOUNT" 2>/dev/null || die "Failed to extract ISO contents"
+    if ! verify_iso_extraction "$USB_MOUNT"; then
+        warn "ISO extraction verification failed, cleaning and retrying..."
+        rm -rf "${USB_MOUNT:?}"/* 2>/dev/null || true
+        retry_xorriso -osirrox on -indev "$ISO_PATH" -extract / "$USB_MOUNT" 2>/dev/null || die "Failed to extract ISO contents (retry)"
+        if ! verify_iso_extraction "$USB_MOUNT"; then
+            error "ISO extraction verification failed after retry"
+            return 1
+        fi
+    fi
+}
+
+_phase_copy_pkgs_usb() {
+    local USB_MOUNT="/Volumes/CIDATA"
+    if [ -n "${1:-}" ]; then
+        USB_MOUNT="$1"
+    fi
+    local pkgs_copied=0
+    if ! ls "$USB_MOUNT/macpro-pkgs/"*.deb 1>/dev/null 2>&1; then
+        log "Copying driver packages to USB..."
+        mkdir -p "$USB_MOUNT/macpro-pkgs"
+        cp "$SCRIPT_DIR/packages/"*.deb "$USB_MOUNT/macpro-pkgs/" 2>/dev/null && pkgs_copied=1 || warn "Some packages may be missing"
+    fi
+    if [ -d "$SCRIPT_DIR/packages/dkms-patches" ] && [ ! -d "$USB_MOUNT/macpro-pkgs/dkms-patches" ]; then
+        mkdir -p "$USB_MOUNT/macpro-pkgs/dkms-patches"
+        cp "$SCRIPT_DIR/packages/dkms-patches/"* "$USB_MOUNT/macpro-pkgs/dkms-patches/" 2>/dev/null && pkgs_copied=1 || true
+    fi
+    if [ "$pkgs_copied" -eq 1 ] && ! ls "$USB_MOUNT/macpro-pkgs/"*.deb 1>/dev/null 2>&1; then
+        error "Package verification failed: no .deb files found after copy"
+        return 1
+    fi
+}
+
+_phase_generate_config_usb() {
+    local USB_MOUNT="/Volumes/CIDATA"
+    if [ -n "${1:-}" ]; then
+        USB_MOUNT="$1"
+    fi
+    local STORAGE_TYPE_ARG="dualboot"
+    local NETWORK_TYPE_ARG="wifi"
+    [ "${STORAGE_LAYOUT:-1}" = "2" ] && STORAGE_TYPE_ARG="fulldisk"
+    [ "${NETWORK_TYPE:-1}" = "2" ] && NETWORK_TYPE_ARG="ethernet"
+    generate_autoinstall "$USB_MOUNT/autoinstall.yaml" "$STORAGE_TYPE_ARG" "$NETWORK_TYPE_ARG"
+    log "Creating cidata structure..."
+    mkdir -p "$USB_MOUNT/cidata"
+    if [ "${STORAGE_LAYOUT:-1}" = "1" ]; then
+        generate_dualboot_storage "$USB_MOUNT/autoinstall.yaml" "$USB_MOUNT/cidata/user-data" "$INTERNAL_DISK"
+    else
+        cp "$USB_MOUNT/autoinstall.yaml" "$USB_MOUNT/cidata/user-data"
+    fi
+    [ -f "$USB_MOUNT/cidata/meta-data" ] || echo "instance-id: macpro-linux-i1" > "$USB_MOUNT/cidata/meta-data"
+    [ -f "$USB_MOUNT/cidata/vendor-data" ] || touch "$USB_MOUNT/cidata/vendor-data"
+    write_grub_config "$USB_MOUNT"
+    if ! verify_cidata_structure "$USB_MOUNT"; then
+        error "CIDATA structure verification failed"
+        return 1
+    fi
+    if ! verify_yaml_syntax "$USB_MOUNT/autoinstall.yaml"; then
+        error "YAML syntax verification failed for autoinstall.yaml"
+        return 1
+    fi
+}
+
+_phase_verify_usb() {
+    local USB_MOUNT="/Volumes/CIDATA"
+    if [ -n "${1:-}" ]; then
+        USB_MOUNT="$1"
+    fi
+    verify_esp_contents "$USB_MOUNT"
+    retry_diskutil unmountDisk "$TARGET_DEVICE" 2>/dev/null || true
+}
+
 show_blind_boot_instructions() {
     echo ""
     echo "========================================="

@@ -10,10 +10,14 @@
 
 source "${LIB_DIR:-./lib}/colors.sh"
 source "${LIB_DIR:-./lib}/logging.sh"
+source "${LIB_DIR:-./lib}/rollback.sh" 2>/dev/null || true
 
 ESP_NAME="${ESP_NAME:-CIDATA}"
 
 revert_changes() {
+    # Load journal state at start
+    journal_read
+
     if [ "${DRY_RUN:-0}" -eq 1 ]; then
         log "[DRY RUN] Would revert changes:"
         log "[DRY RUN]   - Remove ESP partition if created"
@@ -26,60 +30,111 @@ revert_changes() {
     error "Reverting deployment changes..."
     local REVERT_ERRORS=0
 
-    if [ "${DEPLOY_METHOD:-}" = "1" ]; then
+    # Determine deploy method from journal or fallback to variable
+    local deploy_method="${JOURNAL_DEPLOY_METHOD:-${DEPLOY_METHOD:-}}"
+
+    if [ "$deploy_method" = "1" ] || [ "$deploy_method" = "internal" ]; then
         # Internal partition method cleanup
         if [ -z "${INTERNAL_DISK:-}" ]; then
             INTERNAL_DISK=$(diskutil list | grep -E 'internal.*physical' | head -1 | grep -oE '/dev/disk[0-9]+' || true)
         fi
 
-        if [ "${_ESP_CREATED:-0}" -eq 1 ] && [ -n "${INTERNAL_DISK:-}" ]; then
-            local ESP_REVERT_DEV
-            ESP_REVERT_DEV=$(diskutil list "$INTERNAL_DISK" 2>/dev/null | grep "$ESP_NAME" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
-            if [ -n "$ESP_REVERT_DEV" ]; then
-                log "Removing ESP partition /dev/$ESP_REVERT_DEV..."
-                diskutil unmount "/dev/$ESP_REVERT_DEV" 2>/dev/null || true
-                diskutil eraseVolume free none "/dev/$ESP_REVERT_DEV" 2>/dev/null || {
-                    warn "Could not remove ESP partition /dev/$ESP_REVERT_DEV"
+        # Prefer journal values over runtime variables
+        local esp_created="${JOURNAL_ESP_CREATED:-${_ESP_CREATED:-0}}"
+        local esp_device="${JOURNAL_ESP_DEVICE:-}"
+        local apfs_resized="${JOURNAL_APFS_RESIZED:-${_APFS_RESIZED:-0}}"
+        local apfs_container="${JOURNAL_ORIGINAL_APFS_CONTAINER:-${APFS_CONTAINER:-}}"
+        local original_size="${JOURNAL_ORIGINAL_APFS_SIZE:-${_APFS_ORIGINAL_SIZE:-}}"
+
+        # ESP removal with self-healing (try to mount if not found)
+        if [ "$esp_created" = "1" ]; then
+            if [ -z "$esp_device" ] && [ -n "${INTERNAL_DISK:-}" ]; then
+                esp_device=$(diskutil list "$INTERNAL_DISK" 2>/dev/null | grep "$ESP_NAME" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
+            fi
+
+            if [ -n "$esp_device" ]; then
+                log "Removing ESP partition /dev/$esp_device..."
+
+                # Self-healing: try to mount ESP if it's not mounted
+                local mount_point
+                mount_point=$(diskutil info "/dev/$esp_device" 2>/dev/null | grep "Mount Point" | awk '{print $NF}' || true)
+                if [ -z "$mount_point" ] || [ "$mount_point" = "N/A" ]; then
+                    log "ESP not mounted, attempting to mount..."
+                    diskutil mount "/dev/$esp_device" 2>/dev/null || true
+                fi
+
+                retry_diskutil diskutil unmount "/dev/$esp_device" 2>/dev/null || true
+                retry_diskutil diskutil eraseVolume free none "/dev/$esp_device" 2>/dev/null || {
+                    warn "Could not remove ESP partition /dev/$esp_device"
                     REVERT_ERRORS=1
                 }
+            else
+                warn "ESP device not found for removal"
+                REVERT_ERRORS=1
             fi
             _ESP_CREATED=0
         fi
 
-        if [ "${_APFS_RESIZED:-0}" -eq 1 ] && [ -n "${APFS_CONTAINER:-}" ] && [ -n "${_APFS_ORIGINAL_SIZE:-}" ]; then
-            log "Restoring APFS container to ${_APFS_ORIGINAL_SIZE}GB..."
-            diskutil apfs resizeContainer "$APFS_CONTAINER" "${_APFS_ORIGINAL_SIZE}g" 2>/dev/null || {
+        # APFS container restoration - prefer journal values
+        if [ "$apfs_resized" = "1" ] && [ -n "$apfs_container" ] && [ -n "$original_size" ]; then
+            log "Restoring APFS container to ${original_size}GB..."
+            retry_diskutil diskutil apfs resizeContainer "$apfs_container" "${original_size}g" 2>/dev/null || {
                 warn "Could not restore APFS container size"
                 REVERT_ERRORS=1
             }
             _APFS_RESIZED=0
         fi
 
+        # After ESP removal, expand APFS to fill freed space
+        if [ -n "$apfs_container" ]; then
+            log "Expanding APFS container to fill available space..."
+            retry_diskutil diskutil apfs resizeContainer "$apfs_container" 0 2>/dev/null || {
+                warn "Could not expand APFS container to fill space"
+                REVERT_ERRORS=1
+            }
+        fi
+
+        # Restore macOS boot device
         local MACOS_VOLUME="/"
-        if [ -n "${APFS_CONTAINER:-}" ]; then
-            MACOS_VOLUME=$(diskutil info "$APFS_CONTAINER" 2>/dev/null | grep "Mount Point" | awk '{print $NF}' || echo "/")
+        if [ -n "$apfs_container" ]; then
+            MACOS_VOLUME=$(diskutil info "$apfs_container" 2>/dev/null | grep "Mount Point" | awk '{print $NF}' || echo "/")
         fi
         if [ -d "$MACOS_VOLUME" ] && [ "$MACOS_VOLUME" != "/" ]; then
-            bless --mount "$MACOS_VOLUME" --setBoot 2>/dev/null && \
+            retry_diskutil bless --mount "$MACOS_VOLUME" --setBoot 2>/dev/null && \
                 log "macOS boot device restored" || {
                 warn "Could not restore macOS boot device"
                 REVERT_ERRORS=1
             }
         else
-            bless --mount / --setBoot 2>/dev/null && \
+            retry_diskutil bless --mount / --setBoot 2>/dev/null && \
                 log "macOS boot device restored (root fallback)" || {
                 warn "Could not restore macOS boot device"
                 REVERT_ERRORS=1
             }
         fi
-    elif [ "${DEPLOY_METHOD:-}" = "2" ] && [ -n "${TARGET_DEVICE:-}" ]; then
-        # USB method cleanup - unmount but don't erase USB
-        log "Unmounting USB device $TARGET_DEVICE..."
-        diskutil unmountDisk "$TARGET_DEVICE" 2>/dev/null || true
-    elif [ "${DEPLOY_METHOD:-}" = "4" ]; then
-        # VM test cleanup — just power off VM if running
-        if command -v VBoxManage >/dev/null 2>&1; then
-            VBoxManage controlvm macpro-vmtest poweroff 2>/dev/null || true
+    elif [ "$deploy_method" = "2" ] || [ "$deploy_method" = "usb" ]; then
+        # USB method cleanup - use rollback_usb from rollback.sh
+        if command -v rollback_usb >/dev/null 2>&1; then
+            rollback_usb
+        else
+            # Fallback: just unmount
+            local usb_device="${JOURNAL_USB_DEVICE:-${TARGET_DEVICE:-}}"
+            if [ -n "$usb_device" ]; then
+                log "Unmounting USB device $usb_device..."
+                diskutil unmountDisk "$usb_device" 2>/dev/null || true
+            else
+                warn "USB device not found for cleanup"
+            fi
+        fi
+    elif [ "$deploy_method" = "4" ] || [ "$deploy_method" = "vm" ]; then
+        # VM test cleanup - use rollback_vm from rollback.sh
+        if command -v rollback_vm >/dev/null 2>&1; then
+            rollback_vm
+        else
+            # Fallback: just power off
+            if command -v VBoxManage >/dev/null 2>&1; then
+                VBoxManage controlvm macpro-vmtest poweroff 2>/dev/null || true
+            fi
         fi
     fi
 
@@ -94,9 +149,31 @@ cleanup_on_error() {
     [ "${_CLEANUP_DONE:-0}" -eq 1 ] && return
     _CLEANUP_DONE=1
     local EXIT_CODE=$?
-    if [ "$EXIT_CODE" -ne 0 ]; then
-        revert_changes
-        error "Deployment failed (exit code $EXIT_CODE)."
+
+    # Trigger rollback for any error or signal exit (>=128 is signal-caused)
+    if [ "$EXIT_CODE" -ne 0 ] || [ "$EXIT_CODE" -ge 128 ]; then
+        log "Cleanup triggered (exit code $EXIT_CODE)"
+
+        # Use rollback_from_journal if available (more comprehensive)
+        if command -v rollback_from_journal >/dev/null 2>&1; then
+            rollback_from_journal
+        else
+            # Fallback to basic revert
+            revert_changes
+        fi
+
+        # Destroy journal after successful rollback
+        if command -v journal_destroy >/dev/null 2>&1; then
+            journal_destroy
+        fi
+
+        if [ "$EXIT_CODE" -ge 128 ]; then
+            # Signal exit codes: 130=SIGINT, 143=SIGTERM, etc.
+            local signal_num=$((EXIT_CODE - 128))
+            warn "Deployment interrupted by signal $signal_num (exit code $EXIT_CODE)"
+        else
+            error "Deployment failed (exit code $EXIT_CODE)."
+        fi
     fi
 }
 
@@ -104,51 +181,125 @@ handle_revert_flag() {
     # Handle --revert flag for manual rollback
     if [ "${1:-}" = "--revert" ]; then
         log "Manual revert requested..."
-        INTERNAL_DISK=$(diskutil list | grep -E 'internal.*physical' | head -1 | grep -oE '/dev/disk[0-9]+' || true)
-        if [ -z "${INTERNAL_DISK:-}" ]; then
+
+        # Load journal state first
+        if command -v journal_read >/dev/null 2>&1; then
+            journal_read
+        fi
+
+        # Use journal values when available, fall back to disk detection
+        local internal_disk="${JOURNAL_INTERNAL_DISK:-}"
+        local apfs_container="${JOURNAL_ORIGINAL_APFS_CONTAINER:-}"
+        local original_size="${JOURNAL_ORIGINAL_APFS_SIZE:-}"
+        local esp_device="${JOURNAL_ESP_DEVICE:-}"
+
+        # Fallback to disk detection if journal values missing
+        if [ -z "$internal_disk" ]; then
+            internal_disk=$(diskutil list | grep -E 'internal.*physical' | head -1 | grep -oE '/dev/disk[0-9]+' || true)
+        fi
+        if [ -z "${internal_disk:-}" ]; then
             die "Cannot identify internal disk for revert"
         fi
 
-        local APFS_PARTITION
-        APFS_PARTITION=$(diskutil list "$INTERNAL_DISK" | grep -i "APFS" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
-        if [ -n "${APFS_PARTITION:-}" ]; then
-            APFS_CONTAINER=$(diskutil info "$APFS_PARTITION" 2>/dev/null | grep -i "container" | grep -oE 'disk[0-9]+' | head -1 || true)
-        fi
-        if [ -z "${APFS_CONTAINER:-}" ]; then
-            APFS_CONTAINER=$(diskutil list | grep -i "APFS" | grep -oE 'disk[0-9]+' | head -1 || true)
+        if [ -z "$apfs_container" ]; then
+            local APFS_PARTITION
+            APFS_PARTITION=$(diskutil list "$internal_disk" | grep -i "APFS" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
+            if [ -n "${APFS_PARTITION:-}" ]; then
+                apfs_container=$(diskutil info "$APFS_PARTITION" 2>/dev/null | grep -i "container" | grep -oE 'disk[0-9]+' | head -1 || true)
+            fi
+            if [ -z "${apfs_container:-}" ]; then
+                apfs_container=$(diskutil list | grep -i "APFS" | grep -oE 'disk[0-9]+' | head -1 || true)
+            fi
         fi
 
-        # Find and remove the CIDATA ESP partition
-        local ESP_CANDIDATE
-        ESP_CANDIDATE=$(diskutil list "$INTERNAL_DISK" 2>/dev/null | grep "$ESP_NAME" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
-        if [ -n "${ESP_CANDIDATE:-}" ]; then
-            log "Removing ESP partition /dev/$ESP_CANDIDATE..."
-            diskutil unmount "/dev/$ESP_CANDIDATE" 2>/dev/null || true
-            diskutil eraseVolume free none "/dev/$ESP_CANDIDATE" 2>/dev/null || warn "Could not remove /dev/$ESP_CANDIDATE"
+        # Find ESP - prefer journal, then detect
+        if [ -z "$esp_device" ]; then
+            esp_device=$(diskutil list "$internal_disk" 2>/dev/null | grep "$ESP_NAME" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
+        fi
+
+        if [ -n "${esp_device:-}" ]; then
+            log "Removing ESP partition /dev/$esp_device..."
+            retry_diskutil diskutil unmount "/dev/$esp_device" 2>/dev/null || true
+            retry_diskutil diskutil eraseVolume free none "/dev/$esp_device" 2>/dev/null || warn "Could not remove /dev/$esp_device"
         else
             warn "No $ESP_NAME partition found"
         fi
 
         # Restore macOS boot device
         local MACOS_VOLUME
-        MACOS_VOLUME=$(diskutil info "${APFS_CONTAINER:-}" 2>/dev/null | grep "Mount Point" | awk '{print $NF}' || echo "/")
+        MACOS_VOLUME=$(diskutil info "${apfs_container:-}" 2>/dev/null | grep "Mount Point" | awk '{print $NF}' || echo "/")
         if [ -d "$MACOS_VOLUME" ] && [ "$MACOS_VOLUME" != "/" ]; then
-            bless --mount "$MACOS_VOLUME" --setBoot 2>/dev/null && log "macOS boot device restored" || warn "Could not restore macOS boot device"
+            retry_diskutil bless --mount "$MACOS_VOLUME" --setBoot 2>/dev/null && log "macOS boot device restored" || warn "Could not restore macOS boot device"
         else
-            bless --mount / --setBoot 2>/dev/null && log "macOS boot device restored" || warn "Could not restore macOS boot device"
+            retry_diskutil bless --mount / --setBoot 2>/dev/null && log "macOS boot device restored" || warn "Could not restore macOS boot device"
         fi
 
-        # Restore APFS container to fill freed space
-        if [ -n "${APFS_CONTAINER:-}" ]; then
+        # Restore APFS container to fill freed space (use original size if available)
+        if [ -n "${apfs_container:-}" ]; then
+            if [ -n "${original_size:-}" ]; then
+                log "Restoring APFS container to ${original_size}GB, then expanding..."
+                retry_diskutil diskutil apfs resizeContainer "$apfs_container" "${original_size}g" 2>/dev/null || true
+            fi
+
             local CURRENT_APFS_GB
-            CURRENT_APFS_GB=$(diskutil info "$APFS_CONTAINER" 2>/dev/null | grep "Disk Size" | grep -oE '[0-9]+(\.[0-9]+)?' | head -1 || true)
+            CURRENT_APFS_GB=$(diskutil info "$apfs_container" 2>/dev/null | grep "Disk Size" | grep -oE '[0-9]+(\.[0-9]+)?' | head -1 || true)
             log "Current APFS container: ${CURRENT_APFS_GB:-unknown}GB — expanding to fill free space..."
-            diskutil apfs resizeContainer "$APFS_CONTAINER" 0 2>/dev/null && \
+            retry_diskutil diskutil apfs resizeContainer "$apfs_container" 0 2>/dev/null && \
                 log "APFS container expanded to fill freed space" || \
                 warn "Could not expand APFS container (space may need manual recovery)"
+        fi
+
+        # Destroy journal after successful revert
+        if command -v journal_destroy >/dev/null 2>&1; then
+            journal_destroy
         fi
 
         log "Revert complete"
         exit 0
     fi
+}
+
+revert_usb() {
+    local usb_device="${1:-${TARGET_DEVICE:-}}"
+
+    if [ -z "$usb_device" ]; then
+        warn "revert_usb: no USB device specified"
+        return 0
+    fi
+
+    log "Reverting USB device $usb_device..."
+
+    local gpt_backup="${USB_GPT_BACKUP:-no}"
+    local state_dir="/var/tmp/macpro-deploy"
+    local backup_file="${state_dir}/usb-gpt-backup.bin"
+
+    if [ "$gpt_backup" = "yes" ] && [ -f "$backup_file" ]; then
+        log "Restoring USB partition table from GPT backup..."
+        if retry_diskutil sgdisk -l "$backup_file" "$usb_device" 2>/dev/null; then
+            log "USB partition table restored from backup"
+        else
+            warn "revert_usb: failed to restore GPT from backup"
+        fi
+    else
+        warn "revert_usb: no GPT backup available, manual reformat may be required"
+    fi
+
+    diskutil unmountDisk "$usb_device" 2>/dev/null || true
+
+    return 0
+}
+
+revert_vm() {
+    log "Reverting VM test environment..."
+
+    if command -v VBoxManage >/dev/null 2>&1; then
+        VBoxManage controlvm macpro-vmtest poweroff 2>/dev/null || true
+        sleep 1
+        VBoxManage unregistervm macpro-vmtest --delete 2>/dev/null || true
+        log "VM test environment cleaned up"
+    else
+        warn "revert_vm: VBoxManage not available"
+    fi
+
+    return 0
 }
