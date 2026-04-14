@@ -200,31 +200,48 @@ with open('$OUTPUT_PATH', 'w') as f:
 
     log "Autoinstall configuration generated: $OUTPUT_PATH"
 
+    # Helper: escape special chars for sed replacement with # delimiter
+    # Must escape: \ (escape char), & (pattern repeat), # (delimiter), / (common in URLs)
+    _sed_escape() {
+        printf '%s\n' "$1" | sed 's/[&\\\/#]/\\&/g'
+    }
+
+    _sed_escape_yaml_dq() {
+        printf '%s\n' "$1" | sed 's/[&\\\/#"]/\\&/g'
+    }
+
+
     # Deploy.conf placeholders → autoinstall template
     if [ -n "${USERNAME:-}" ]; then
-        sed -i "s#__USERNAME__#${USERNAME}#g" "$OUTPUT_PATH" 2>/dev/null || \
-            sed -i '' "s#__USERNAME__#${USERNAME}#g" "$OUTPUT_PATH"
+        local escaped_val
+        escaped_val=$(_sed_escape "$USERNAME")
+        sed -i "s#__USERNAME__#${escaped_val}#g" "$OUTPUT_PATH" 2>/dev/null || \
+            sed -i '' "s#__USERNAME__#${escaped_val}#g" "$OUTPUT_PATH"
     fi
     if [ -n "${REALNAME:-}" ]; then
-        sed -i "s#__REALNAME__#${REALNAME}#g" "$OUTPUT_PATH" 2>/dev/null || \
-            sed -i '' "s#__REALNAME__#${REALNAME}#g" "$OUTPUT_PATH"
+        local escaped_val
+        escaped_val=$(_sed_escape "$REALNAME")
+        sed -i "s#__REALNAME__#${escaped_val}#g" "$OUTPUT_PATH" 2>/dev/null || \
+            sed -i '' "s#__REALNAME__#${escaped_val}#g" "$OUTPUT_PATH"
     fi
     if [ -n "${PASSWORD_HASH:-}" ]; then
-        # $6$ hashes contain $ — must escape for sed
-        local escaped_hash
-        escaped_hash=$(printf '%s\n' "$PASSWORD_HASH" | sed 's/[&\\#]/\\&/g')
-        sed -i "s#__PASSWORD_HASH__#${escaped_hash}#g" "$OUTPUT_PATH" 2>/dev/null || \
-            sed -i '' "s#__PASSWORD_HASH__#${escaped_hash}#g" "$OUTPUT_PATH"
+        # $6$ hashes contain $ — already escaped by _sed_escape
+        local escaped_val
+        escaped_val=$(_sed_escape "$PASSWORD_HASH")
+        sed -i "s#__PASSWORD_HASH__#${escaped_val}#g" "$OUTPUT_PATH" 2>/dev/null || \
+            sed -i '' "s#__PASSWORD_HASH__#${escaped_val}#g" "$OUTPUT_PATH"
     fi
     if [ -n "${HOSTNAME:-}" ]; then
-        sed -i "s#__HOSTNAME__#${HOSTNAME}#g" "$OUTPUT_PATH" 2>/dev/null || \
-            sed -i '' "s#__HOSTNAME__#${HOSTNAME}#g" "$OUTPUT_PATH"
+        local escaped_val
+        escaped_val=$(_sed_escape "$HOSTNAME")
+        sed -i "s#__HOSTNAME__#${escaped_val}#g" "$OUTPUT_PATH" 2>/dev/null || \
+            sed -i '' "s#__HOSTNAME__#${escaped_val}#g" "$OUTPUT_PATH"
     fi
     if [ -n "${WHURL:-}" ]; then
-        local escaped_whurl
-        escaped_whurl=$(printf '%s\n' "$WHURL" | sed 's/[&\\#]/\\&/g')
-        sed -i "s#__WHURL__#${escaped_whurl}#g" "$OUTPUT_PATH" 2>/dev/null || \
-            sed -i '' "s#__WHURL__#${escaped_whurl}#g" "$OUTPUT_PATH"
+        local escaped_val
+        escaped_val=$(_sed_escape "$WHURL")
+        sed -i "s#__WHURL__#${escaped_val}#g" "$OUTPUT_PATH" 2>/dev/null || \
+            sed -i '' "s#__WHURL__#${escaped_val}#g" "$OUTPUT_PATH"
     fi
     if [ -n "${SSH_KEYS:-}" ]; then
         local yaml_keys=""
@@ -235,17 +252,18 @@ with open('$OUTPUT_PATH', 'w') as f:
             bash_keys="${bash_keys} \"${key}\""
         done <<< "$SSH_KEYS"
         yaml_keys="${yaml_keys%$'\n'}"
-        local escaped_yaml
-        escaped_yaml=$(printf '%s\n' "$yaml_keys" | sed 's/[&\\\/]/\\&/g')
+        local escaped_yaml escaped_bash
+        escaped_yaml=$(_sed_escape "$yaml_keys")
+        escaped_bash=$(_sed_escape "$bash_keys")
         sed -i "s#__SSH_KEYS__#${escaped_yaml}#g" "$OUTPUT_PATH" 2>/dev/null || \
             sed -i '' "s#__SSH_KEYS__#${escaped_yaml}#g" "$OUTPUT_PATH"
-        sed -i "s#__SSH_KEYS_LIST__#${bash_keys}#g" "$OUTPUT_PATH" 2>/dev/null || \
-            sed -i '' "s#__SSH_KEYS_LIST__#${bash_keys}#g" "$OUTPUT_PATH"
+        sed -i "s#__SSH_KEYS_LIST__#${escaped_bash}#g" "$OUTPUT_PATH" 2>/dev/null || \
+            sed -i '' "s#__SSH_KEYS_LIST__#${escaped_bash}#g" "$OUTPUT_PATH"
     fi
     if [ -n "${WIFI_SSID:-}" ] && [ -n "${WIFI_PASSWORD:-}" ]; then
         local escaped_ssid escaped_password
-        escaped_ssid=$(printf '%s\n' "$WIFI_SSID" | sed 's/[&\\#]/\\&/g')
-        escaped_password=$(printf '%s\n' "$WIFI_PASSWORD" | sed 's/[&\\#]/\\&/g')
+        escaped_ssid=$(_sed_escape_yaml_dq "$WIFI_SSID")
+        escaped_password=$(_sed_escape_yaml_dq "$WIFI_PASSWORD")
         sed -i "s#__WIFI_SSID__#${escaped_ssid}#g" "$OUTPUT_PATH" 2>/dev/null || \
             sed -i '' "s#__WIFI_SSID__#${escaped_ssid}#g" "$OUTPUT_PATH"
         sed -i "s#__WIFI_PASSWORD__#${escaped_password}#g" "$OUTPUT_PATH" 2>/dev/null || \
