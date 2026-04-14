@@ -5,7 +5,7 @@
 # Provides revert_changes for cleaning up deployment artifacts
 # and handle_revert_flag for the --revert command-line flag.
 #
-# Dependencies: lib/colors.sh, lib/utils.sh
+# Dependencies: lib/colors.sh, lib/logging.sh
 #
 
 source "${LIB_DIR:-./lib}/colors.sh"

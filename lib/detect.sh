@@ -5,7 +5,7 @@
 # Provides detect_iso to find Ubuntu ISO files and detect_usb_devices/
 # select_usb_device for USB device discovery and selection.
 #
-# Dependencies: lib/colors.sh, lib/utils.sh
+# Dependencies: lib/colors.sh, lib/logging.sh
 #
 
 source "${LIB_DIR:-./lib}/colors.sh"

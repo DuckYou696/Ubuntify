@@ -5,7 +5,7 @@
 # Provides verify_esp_contents for validating ESP files and
 # attempt_bless for setting the boot device on macOS.
 #
-# Dependencies: lib/colors.sh, lib/utils.sh
+# Dependencies: lib/colors.sh, lib/logging.sh
 #
 
 source "${LIB_DIR:-./lib}/colors.sh"

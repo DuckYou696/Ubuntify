@@ -3,9 +3,8 @@
 *.qcow2
 
 # SSH credentials - NEVER commit private keys
-ssh-MacPro/
-ssh-Macbook/
 ssh-*/
+ssh/config
 
 # Deployment config (contains WiFi credentials)
 deploy.conf
@@ -26,7 +25,4 @@ macpro-monitor/logs/
 *.vdi
 *.vmdk
 *.img
-*.raw# Mac Pro 2013 Ubuntu deployment tool
- ssh/
- ssh/config
-ssh/config
+*.raw

@@ -27,15 +27,18 @@ Ubuntu 24.04.4 LTS Server deployment and management tool for Mac Pro 2013 (MacPr
 ├── lib/                             # Modular library
 │   ├── colors.sh                    # Color constants (RED, GREEN, YELLOW, NC) with guard
 │   ├── logging.sh                   # Multi-target logger (serial+file+webhook) with level control
-│   ├── tui.sh                       # TUI primitives (dialog/whiptail/raw) — auto-detect backend
+│   ├── tui.sh                       # TUI primitives (dialog/whiptail/raw) + agent mode bypass
+│   ├── dryrun.sh                    # Dry-run wrapper, agent output, exit codes, JSON helpers
+│   ├── retry.sh                     # Exponential backoff retry wrappers (diskutil, ssh, xorriso)
+│   ├── verify.sh                    # Post-operation verification with self-healing
+│   ├── rollback.sh                  # State journal + rollback engine (phase tracking)
 │   ├── remote.sh                    # SSH management functions for post-install operations
-│   ├── utils.sh                     # Legacy logger (log, warn, error, die, vlog) — backward compat
 │   ├── detect.sh                    # detect_iso, detect_usb_devices, select_usb_device
 │   ├── disk.sh                      # analyze_disk_layout, shrink_apfs_if_needed, create_esp_partition
 │   ├── autoinstall.sh               # generate_autoinstall, generate_dualboot_storage
 │   ├── bless.sh                     # verify_esp_contents, attempt_bless
-│   ├── deploy.sh                    # deploy_internal_partition, deploy_usb, deploy_manual, deploy_vm_test
-│   └── revert.sh                    # revert_changes, handle_revert_flag, cleanup_on_error
+│   ├── deploy.sh                    # 7-phase checkpointed deployment with journal state
+│   └── revert.sh                    # revert_changes, handle_revert_flag, journal-aware rollback
 ├── packages/                        # .deb files for driver compilation (34 debs)
 │   ├── broadcom-sta-dkms_*.deb      # Broadcom WiFi driver source
 │   ├── dkms_*.deb                   # Dynamic Kernel Module Support
@@ -45,6 +48,13 @@ Ubuntu 24.04.4 LTS Server deployment and management tool for Mac Pro 2013 (MacPr
 │   └── ...
 ├── ssh/                             # SSH configuration for Manage mode
 │   └── config.example               # Template for ~/.ssh/config (Host macpro-linux)
+├── tests/                           # Unit tests and testing protocol
+│   ├── run_tests.sh                 # Test runner
+│   ├── test_retry.sh               # lib/retry.sh tests
+│   ├── test_rollback.sh            # lib/rollback.sh tests
+│   ├── test_verify.sh              # lib/verify.sh tests
+│   ├── test_dryrun.sh              # lib/dryrun.sh tests
+│   └── TESTING_PROMPT.md           # Comprehensive code review and testing protocol
 ├── README.md                        # Documentation
 ├── How-to-Update.md                 # Kernel update safety guide (7 phases with rollback)
 ├── Post-Install.md                  # Post-install operations (erase macOS, system update)
@@ -78,6 +88,16 @@ sudo ./prepare-deployment.sh
 sudo ./prepare-deployment.sh --dry-run
 ```
 
+### Deploy with agent mode (non-interactive, for LLM/automation)
+```bash
+sudo ./prepare-deployment.sh --agent --yes --method 1 --storage 1 --network 1 --json
+```
+
+### Manage via agent mode
+```bash
+sudo ./prepare-deployment.sh --agent --operation kernel_status --host macpro-linux --json
+```
+
 ### Revert failed deployment
 ```bash
 sudo ./prepare-deployment.sh --revert
@@ -103,6 +123,11 @@ cd vm-test && sudo ./build-iso-vm.sh && ./create-vm.sh && ./test-vm.sh
 ### Syntax check all shell scripts
 ```bash
 bash -n prepare-deployment.sh && bash -n lib/*.sh && bash -n build-iso.sh && bash -n vm-test/*.sh
+```
+
+### Run unit tests
+```bash
+bash tests/run_tests.sh
 ```
 
 ## Deployment Methods
@@ -145,6 +170,40 @@ Method 4 (VM test) uses fixed Ethernet and single disk — no storage or network
 | Ubuntu → macOS | GRUB menu | Select "Reboot to Apple Boot Manager" |
 | Any → macOS | Firmware | Hold Option at boot (requires keyboard) |
 
+## CLI Interface
+
+### Interactive (TUI)
+```bash
+sudo ./prepare-deployment.sh          # Deploy or Manage menu
+sudo ./prepare-deployment.sh --dry-run  # Show what would happen
+sudo ./prepare-deployment.sh --revert   # Undo failed deployment
+```
+
+### Agent Mode (non-interactive)
+```bash
+# Deploy - internal partition, dual-boot, WiFi
+sudo ./prepare-deployment.sh --agent --yes --method 1 --storage 1 --network 1 --json
+
+# Deploy - USB, full-disk, Ethernet
+sudo ./prepare-deployment.sh --agent --yes --method 2 --storage 2 --network 2 --json --dry-run
+
+# Manage - check kernel status
+sudo ./prepare-deployment.sh --agent --operation kernel_status --host macpro-linux --json
+
+# Manage - erase macOS
+sudo ./prepare-deployment.sh --agent --yes --operation erase_macos --host macpro-linux --json
+
+# Build ISO only
+sudo ./prepare-deployment.sh --agent --build-iso --json
+
+# Revert via agent
+sudo ./prepare-deployment.sh --agent --revert --json
+```
+
+Flags: `--agent`, `--yes`, `--dry-run`, `--json`, `--method N`, `--storage N`, `--network N`, `--operation OP`, `--host HOST`, `--wifi-ssid`, `--wifi-password`, `--webhook-host`, `--webhook-port`, `--revert`, `--build-iso`
+
+Exit codes: 0=success, 1=general, 2=usage, 3=config, 4=check, 5=partial, 6=dependency, 7=network, 8=disk, 9=timeout, 10=auth, 11=dry-run-ok, 12=agent-param, 13=agent-denied
+
 ## Code Style Guidelines
 
 ### Shell Scripts (Bash)
@@ -163,6 +222,15 @@ Use `RED`, `GREEN`, `NC` color constants. Log to file with `tee`.
 - Progress uses `tui_progress` (reads `PERCENT MESSAGE` from stdin)
 - Log tailing uses `tui_tailbox`
 - Never call `dialog` or `whiptail` directly — always via tui_* functions
+- When `AGENT_MODE=1`, all tui_* functions bypass interactive prompts and emit JSON/log output
+
+### Dry-Run and Agent Module (lib/dryrun.sh)
+- `dry_run_exec "description" command args` — wraps destructive commands; in DRY_RUN=1, prints `[DRY-RUN]` and returns 0 without executing
+- `is_dry_run` — returns 0 if DRY_RUN=1, 1 otherwise
+- `agent_output type title value [key val...]` — emits NDJSON (JSON_OUTPUT=1) or log lines for LLM agents
+- `agent_error message [code]` — emits structured error and exits with code
+- `agent_confirm title prompt` — auto-approve (CONFIRM_YES=1) or auto-deny (0) in agent mode
+- Exit code constants: E_SUCCESS(0), E_GENERAL(1), E_USAGE(2), E_CONFIG(3), E_CHECK(4), E_PARTIAL(5), E_DEPENDENCY(6), E_NETWORK(7), E_DISK(8), E_TIMEOUT(9), E_AUTH(10), E_DRY_RUN_OK(11), E_AGENT_PARAM(12), E_AGENT_DENIED(13)
 
 ### Logging Module (lib/logging.sh)
 - Multi-target: serial console, file, webhook

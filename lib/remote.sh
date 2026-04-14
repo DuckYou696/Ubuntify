@@ -6,7 +6,7 @@
 # This module is called from prepare-deployment.sh's "Manage" mode.
 # All functions execute commands on the remote instance.
 #
-# Dependencies: lib/colors.sh, lib/utils.sh
+# Dependencies: lib/colors.sh, lib/logging.sh
 #
 
 [ "${_REMOTE_SH_SOURCED:-0}" -eq 1 ] && return 0

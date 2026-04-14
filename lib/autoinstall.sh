@@ -5,7 +5,7 @@
 # Provides generate_autoinstall for creating autoinstall YAML configs
 # and generate_dualboot_storage for dynamic dual-boot storage configs.
 #
-# Dependencies: lib/colors.sh, lib/utils.sh
+# Dependencies: lib/colors.sh, lib/logging.sh
 #
 
 source "${LIB_DIR:-./lib}/colors.sh"

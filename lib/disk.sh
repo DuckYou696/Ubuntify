@@ -5,7 +5,7 @@
 # Provides analyze_disk_layout, shrink_apfs_if_needed, create_esp_partition,
 # and extract_iso_to_esp for managing Mac disk partitions and ESP creation.
 #
-# Dependencies: lib/colors.sh, lib/utils.sh
+# Dependencies: lib/colors.sh, lib/logging.sh
 #
 
 source "${LIB_DIR:-./lib}/colors.sh"

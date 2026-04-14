@@ -5,7 +5,7 @@
 # Provides deploy_internal_partition, deploy_usb, deploy_manual, and
 # deploy_vm_test functions for different deployment scenarios.
 #
-# Dependencies: lib/colors.sh, lib/utils.sh, lib/detect.sh, lib/disk.sh,
+# Dependencies: lib/colors.sh, lib/logging.sh, lib/detect.sh, lib/disk.sh,
 #               lib/autoinstall.sh, lib/bless.sh
 #
 
