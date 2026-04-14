@@ -880,7 +880,7 @@ menu_monitor() {
 }
 
 menu_test_vm() {
-    local vm_dir="$SCRIPT_DIR/vm-test"
+    local vm_dir="$SCRIPT_DIR/tests/vm"
     local choice
     choice=$(tui_menu "VM Test" "Select VM test action:" \
         "Build VM ISO" "build" \
@@ -893,12 +893,12 @@ menu_test_vm() {
 
     case "$choice" in
         build)
-            if [ -f "$vm_dir/build-iso-vm.sh" ]; then
+            if [ -f "$LIB_DIR/build-iso.sh" ]; then
                 log_info "Building VM ISO..."
-                "$vm_dir/build-iso-vm.sh" 2>&1 | tee -a "$(log_get_file_path)" | tui_progress "Building VM ISO"
-                tui_msgbox "Build Complete" "VM ISO built."
+                sudo "$LIB_DIR/build-iso.sh" --vm 2>&1 | tee -a "$(log_get_file_path)" | tui_progress "Building VM ISO"
+                tui_msgbox "Build Complete" "VM ISO built.\n\nOutput: ${OUTPUT_DIR}/ubuntu-vmtest.iso"
             else
-                tui_msgbox "Error" "build-iso-vm.sh not found"
+                tui_msgbox "Error" "lib/build-iso.sh not found"
             fi
             ;;
         create)
@@ -907,7 +907,7 @@ menu_test_vm() {
                 "$vm_dir/create-vm.sh"
                 tui_msgbox "VM Created" "VirtualBox VM created.\n\nUse 'Run VM' to start."
             else
-                tui_msgbox "Error" "create-vm.sh not found"
+                tui_msgbox "Error" "create-vm.sh not found in $vm_dir"
             fi
             ;;
         run)
@@ -915,14 +915,14 @@ menu_test_vm() {
                 log_info "Starting VM..."
                 "$vm_dir/test-vm.sh" run
             else
-                tui_msgbox "Error" "test-vm.sh not found"
+                tui_msgbox "Error" "test-vm.sh not found in $vm_dir"
             fi
             ;;
         ssh)
             if [ -f "$vm_dir/test-vm.sh" ]; then
                 "$vm_dir/test-vm.sh" ssh
             else
-                tui_msgbox "Error" "test-vm.sh not found"
+                tui_msgbox "Error" "test-vm.sh not found in $vm_dir"
             fi
             ;;
         stop)
@@ -930,7 +930,7 @@ menu_test_vm() {
                 "$vm_dir/test-vm.sh" stop
                 tui_msgbox "VM Stopped" "VM has been powered off."
             else
-                tui_msgbox "Error" "test-vm.sh not found"
+                tui_msgbox "Error" "test-vm.sh not found in $vm_dir"
             fi
             ;;
         serial)

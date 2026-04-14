@@ -493,13 +493,13 @@ rollback_from_journal() {
     local deploy_method="${JOURNAL_DEPLOY_METHOD:-}"
 
     case "$deploy_method" in
-        internal)
+        internal|1)
             rollback_internal
             ;;
-        usb)
+        usb|2)
             rollback_usb
             ;;
-        vm)
+        vm|4)
             rollback_vm
             ;;
         *)

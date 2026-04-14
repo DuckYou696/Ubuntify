@@ -37,7 +37,7 @@ TARGET_DEVICE="${TARGET_DEVICE:-}"
 _phase_analyze() {
     analyze_disk_layout INTERNAL_DISK APFS_CONTAINER
     snapshot_disk_layout "$INTERNAL_DISK"
-    journal_save_originals APFS_SIZE "${_APFS_ORIGINAL_SIZE:-}" INTERNAL_DISK "$INTERNAL_DISK" APFS_CONTAINER "$APFS_CONTAINER"
+    journal_save_originals INTERNAL_DISK "$INTERNAL_DISK" APFS_CONTAINER "$APFS_CONTAINER"
 }
 
 _phase_shrink_apfs() {
@@ -106,7 +106,7 @@ _phase_copy_pkgs() {
     fi
     if [ -d "$SCRIPT_DIR/packages/dkms-patches" ] && [ ! -d "$ESP_MOUNT/macpro-pkgs/dkms-patches" ]; then
         mkdir -p "$ESP_MOUNT/macpro-pkgs/dkms-patches"
-        cp "$SCRIPT_DIR/packages/dkms-patches/"* "$ESP_MOUNT/macpro-pkgs/dkms-patches/" 2>/dev/null && pkgs_copied=1 || true
+        cp "$SCRIPT_DIR/packages/dkms-patches/"* "$ESP_MOUNT/macpro-pkgs/dkms-patches/" || die "Failed to copy DKMS patches — WiFi driver cannot compile without them"
     fi
     # Verify files exist after copy
     if [ "$pkgs_copied" -eq 1 ] && ! ls "$ESP_MOUNT/macpro-pkgs/"*.deb 1>/dev/null 2>&1; then
@@ -165,11 +165,17 @@ _phase_verify_bless() {
         ESP_MOUNT="$1"
     fi
     verify_esp_contents "$ESP_MOUNT"
+    if [ -z "${_ESP_DEVICE:-}" ]; then
+        warn "ESP device not detected — skipping bless (boot selection must be done manually)"
+        log "Recovery Mode workaround: boot to Recovery (Cmd+R), run 'csrutil enable --without nvram', then retry"
+        return 1
+    fi
     local BLESS_OK
-    BLESS_OK=$(attempt_bless "$ESP_MOUNT" "${_ESP_DEVICE:-}")
+    BLESS_OK=$(attempt_bless "$ESP_MOUNT" "$_ESP_DEVICE")
     if ! verify_bless_result "$ESP_MOUNT"; then
         warn "Bless verification failed — manual boot selection required"
         log "Recovery Mode workaround: boot to Recovery (Cmd+R), run 'csrutil enable --without nvram', then retry"
+        return 1
     fi
     return 0
 }
@@ -509,7 +515,7 @@ _phase_copy_pkgs_usb() {
     fi
     if [ -d "$SCRIPT_DIR/packages/dkms-patches" ] && [ ! -d "$USB_MOUNT/macpro-pkgs/dkms-patches" ]; then
         mkdir -p "$USB_MOUNT/macpro-pkgs/dkms-patches"
-        cp "$SCRIPT_DIR/packages/dkms-patches/"* "$USB_MOUNT/macpro-pkgs/dkms-patches/" 2>/dev/null && pkgs_copied=1 || true
+        cp "$SCRIPT_DIR/packages/dkms-patches/"* "$USB_MOUNT/macpro-pkgs/dkms-patches/" || die "Failed to copy DKMS patches — WiFi driver cannot compile without them"
     fi
     if [ "$pkgs_copied" -eq 1 ] && ! ls "$USB_MOUNT/macpro-pkgs/"*.deb 1>/dev/null 2>&1; then
         error "Package verification failed: no .deb files found after copy"

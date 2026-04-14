@@ -127,7 +127,7 @@ if 'identity' in ai:
         return 1
     fi
 
-    return 0
+    log "verify_autoinstall_schema: schema validation passed"
 }
 
 # verify_esp_mount mount_point

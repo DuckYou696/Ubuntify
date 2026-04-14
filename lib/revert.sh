@@ -146,9 +146,9 @@ revert_changes() {
 }
 
 cleanup_on_error() {
+    local EXIT_CODE=$?
     [ "${_CLEANUP_DONE:-0}" -eq 1 ] && return
     _CLEANUP_DONE=1
-    local EXIT_CODE=$?
 
     # Trigger rollback for any error or signal exit (>=128 is signal-caused)
     if [ "$EXIT_CODE" -ne 0 ] || [ "$EXIT_CODE" -ge 128 ]; then

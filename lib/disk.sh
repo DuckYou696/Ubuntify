@@ -64,6 +64,8 @@ shrink_apfs_if_needed() {
 
     if [ "${STORAGE_LAYOUT:-}" != "1" ]; then
         log "Full disk mode selected — skipping APFS resize"
+        eval "${_apfs_resized_name}=0"
+        eval "${_apfs_original_size_name}=0"
         return 0
     fi
 
