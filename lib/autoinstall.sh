@@ -48,7 +48,7 @@ generate_autoinstall() {
     log "  Storage: $STORAGE_TYPE, Network: $NETWORK_TYPE"
 
     # Start with base template
-    local TEMPLATE_PATH="$SCRIPT_DIR/autoinstall.yaml"
+    local TEMPLATE_PATH="${LIB_DIR:-./lib}/autoinstall.yaml"
     if [ ! -f "$TEMPLATE_PATH" ]; then
         die "Template not found: $TEMPLATE_PATH"
     fi

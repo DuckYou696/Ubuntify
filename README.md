@@ -1,5 +1,10 @@
 # Mac Pro 2013 Ubuntu 24.04 — Autoinstall Deployment
 
+> **This document is for humans.** It covers how to use the deployment tool, what each feature does, and how to troubleshoot problems. For machine-oriented architecture details, code conventions, and constraint specifications, see `AGENTS.md`. For a record of what changed between versions, see `CHANGELOG.md`.
+>
+> **What this document contains:** Quick start guides, usage examples, feature descriptions, troubleshooting, and operational instructions.  
+> **What this document does NOT contain:** Bug fix histories, change logs, or version-specific deltas — those belong in `CHANGELOG.md`.
+
 Automated Ubuntu Server 24.04.4 deployment for Mac Pro 2013 (MacPro6,1) with Broadcom BCM4360 WiFi. Four deployment methods: internal ESP partition, USB drive, full manual, or VM test. Supports dual-boot (macOS preserved) and full-disk layouts, WiFi-only and Ethernet configurations.
 
 ## Specifications
@@ -46,6 +51,8 @@ Mac Pro has no Ethernet. Broadcom BCM4360 WiFi requires a proprietary `wl` drive
 | `prereqs/` | Stock Ubuntu 24.04.4 Server ISO (`*.iso` gitignored) |
 | `macpro-monitor/` | Node.js webhook server for installation monitoring (3-pane dashboard) |
 | `vm-test/` | VirtualBox test environment for DKMS compilation validation |
+| `CHANGELOG.md` | Version history — what changed in each release |
+| `AGENTS.md` | Architecture and implementation details for LLM agents and automation tools |
 
 ## Prerequisites
 
@@ -266,9 +273,11 @@ VM uses Ethernet (`enp0s3`) instead of WiFi, DKMS compiles (fatal on failure) bu
 
 Both production and VM GRUB configs include `console=ttyS0,115200` for serial console output. In VirtualBox, UART1 is configured to log to `/tmp/vmtest-serial.log`.
 
-## For Agents
+## For Agents and Automation
 
-`prepare-deployment.sh` supports a non-interactive agent mode designed for LLM agents (Claude Code, Cursor, etc.) that cannot interact with TUI dialogs. All operations can be driven via CLI flags with structured JSON output.
+`prepare-deployment.sh` supports a non-interactive agent mode for LLM agents (Claude Code, Cursor, etc.) and CI/CD pipelines. All operations can be driven via CLI flags with structured JSON output.
+
+> For architecture details, code conventions, constraint specifications, and implementation internals, see `AGENTS.md` (the LLM-oriented companion to this document).
 
 ### Agent Mode Flags
 

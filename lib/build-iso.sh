@@ -13,20 +13,20 @@ for arg in "$@"; do
     esac
 done
 
-readonly SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-readonly LIB_DIR="${SCRIPT_DIR}/lib"
-readonly BASE_ISO="${SCRIPT_DIR}/prereqs/ubuntu-24.04.4-live-server-amd64.iso"
-readonly PKGS_DIR="${SCRIPT_DIR}/packages"
+readonly PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+readonly LIB_DIR="${PROJECT_DIR}/lib"
+readonly BASE_ISO="${PROJECT_DIR}/prereqs/ubuntu-24.04.4-live-server-amd64.iso"
+readonly PKGS_DIR="${PROJECT_DIR}/packages"
 readonly OUTPUT_DIR="${OUTPUT_DIR:-$HOME/.Ubuntu_Deployment}"
 
 # VM-specific vs production defaults
 if [ "$VM_MODE" -eq 1 ]; then
-    readonly AUTOINSTALL="${SCRIPT_DIR}/vm-test/autoinstall-vm.yaml"
+    readonly AUTOINSTALL="${PROJECT_DIR}/vm-test/autoinstall-vm.yaml"
     readonly OUTPUT_ISO="${OUTPUT_DIR}/ubuntu-vmtest.iso"
     readonly STAGING="/tmp/vmtest-iso-staging"
     readonly VM_PREFIX="[build-vm]"
 else
-    readonly AUTOINSTALL="${SCRIPT_DIR}/autoinstall.yaml"
+    readonly AUTOINSTALL="${LIB_DIR}/autoinstall.yaml"
     readonly OUTPUT_ISO="${OUTPUT_DIR}/ubuntu-macpro.iso"
     readonly STAGING="/tmp/macpro-iso-staging"
     readonly VM_PREFIX="[build]"

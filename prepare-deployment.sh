@@ -48,7 +48,7 @@ export CONFIRM_YES
 CONF_FILE="${SCRIPT_DIR}/deploy.conf"
 if [ ! -f "$CONF_FILE" ]; then
     warn "deploy.conf not found — using defaults from deploy.conf.example"
-    CONF_FILE="${SCRIPT_DIR}/deploy.conf.example"
+    CONF_FILE="${LIB_DIR}/deploy.conf.example"
 fi
 
 # Default values for config keys
@@ -430,8 +430,8 @@ deploy_menu() {
 }
 
 menu_build_iso() {
-    if [ ! -f "$SCRIPT_DIR/build-iso.sh" ]; then
-        tui_msgbox "Error" "build-iso.sh not found in $SCRIPT_DIR"
+    if [ ! -f "$LIB_DIR/build-iso.sh" ]; then
+        tui_msgbox "Error" "build-iso.sh not found in $LIB_DIR"
         return 1
     fi
 
@@ -442,7 +442,7 @@ menu_build_iso() {
     log_info "Starting ISO build process..."
     local log_path
     log_path="$(log_get_file_path)"
-    "$SCRIPT_DIR/build-iso.sh" 2>&1 | tee -a "$log_path"
+    "$LIB_DIR/build-iso.sh" 2>&1 | tee -a "$log_path"
     local build_rc=${PIPESTATUS[0]:-$?}
 
     if [ "$build_rc" -ne 0 ]; then
@@ -1037,11 +1037,11 @@ _agent_manage() {
 }
 
 _agent_build_iso() {
-    if [ ! -f "$SCRIPT_DIR/build-iso.sh" ]; then
-        agent_error "build-iso.sh not found in $SCRIPT_DIR" "$E_CONFIG"
+    if [ ! -f "$LIB_DIR/build-iso.sh" ]; then
+        agent_error "build-iso.sh not found in $LIB_DIR" "$E_CONFIG"
     fi
     agent_output "progress" "Build ISO" "starting"
-    "$SCRIPT_DIR/build-iso.sh"
+    "$LIB_DIR/build-iso.sh"
     local rc=$?
     agent_output "result" "Build ISO" "$([ "$rc" -eq 0 ] && echo success || echo failed)" "exitCode" "$rc"
     return "$rc"

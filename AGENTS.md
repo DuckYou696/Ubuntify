@@ -1,5 +1,10 @@
 # Mac Pro 2013 Ubuntu Autoinstall - AGENTS.md
 
+> **This document is for LLM agents and automated tools.** It describes architecture, constraints, code conventions, and implementation details that agents need to work effectively. For human-oriented usage instructions, troubleshooting, and examples, see `README.md`. For a record of what changed between versions, see `CHANGELOG.md`.
+>
+> **What this document contains:** Code structure, module APIs, naming conventions, constraints, build/test commands, deployment internals, and context management rules.  
+> **What this document does NOT contain:** Bug fix histories, change logs, or version-specific deltas — those belong in `CHANGELOG.md`.
+
 ## Project Overview
 
 Ubuntu 24.04.4 LTS Server deployment and management tool for Mac Pro 2013 (MacPro6,1) with Broadcom BCM4360 WiFi. Two modes: **Deploy** (local: build ISO, deploy to ESP/USB/VM, monitor installation) and **Manage** (remote: SSH into installed instance for kernel management, driver rebuilds, macOS erasure, system updates). TUI interface using dialog/whiptail with raw bash fallback. Multi-target logging (serial + file + webhook). Published on GitHub for other Mac Pro owners.
@@ -21,11 +26,13 @@ Ubuntu 24.04.4 LTS Server deployment and management tool for Mac Pro 2013 (MacPr
 ```
 /Users/djtchill/Desktop/Mac/
 ├── prepare-deployment.sh             # Main entry point — TUI with Deploy + Manage modes
-├── autoinstall.yaml                 # Autoinstall configuration (base template — WiFi + dual-boot)
-├── build-iso.sh                     # ISO builder (xorriso extract-and-repack) — called as subprocess
-├── deploy.conf                      # Runtime config (KEY=VALUE, gitignored)
-├── deploy.conf.example              # WiFi/webhook config template (copy to deploy.conf)
+├── deploy.conf                       # Runtime config (KEY=VALUE, gitignored)
 ├── lib/                             # Modular library
+│   ├── autoinstall.yaml             # Autoinstall configuration (base template — WiFi + dual-boot)
+│   ├── build-iso.sh                 # ISO builder (xorriso extract-and-repack) — called as subprocess
+│   ├── deploy.conf.example          # WiFi/webhook config template (copy to deploy.conf)
+│   ├── autoinstall.sh               # generate_autoinstall, generate_dualboot_storage
+│   ├── autoinstall-schema.json      # Subiquity YAML validation schema
 │   ├── colors.sh                    # Color constants (RED, GREEN, YELLOW, NC) with guard
 │   ├── logging.sh                   # Multi-target logger (serial+file+webhook) with level control
 │   ├── tui.sh                       # TUI primitives (dialog/whiptail/raw) + agent mode bypass
@@ -36,8 +43,6 @@ Ubuntu 24.04.4 LTS Server deployment and management tool for Mac Pro 2013 (MacPr
 │   ├── remote.sh                    # SSH management functions for post-install operations
 │   ├── detect.sh                    # detect_iso, detect_usb_devices, select_usb_device
 │   ├── disk.sh                      # analyze_disk_layout, shrink_apfs_if_needed, create_esp_partition
-│   ├── autoinstall.sh               # generate_autoinstall, generate_dualboot_storage
-│   ├── autoinstall-schema.json      # Subiquity YAML validation schema
 │   ├── bless.sh                     # verify_esp_contents, attempt_bless
 │   ├── deploy.sh                    # 7-phase checkpointed deployment with journal state
 │   └── revert.sh                    # revert_changes, handle_revert_flag, journal-aware rollback
@@ -56,11 +61,13 @@ Ubuntu 24.04.4 LTS Server deployment and management tool for Mac Pro 2013 (MacPr
 │   ├── test_rollback.sh            # lib/rollback.sh tests
 │   ├── test_verify.sh              # lib/verify.sh tests
 │   ├── test_dryrun.sh              # lib/dryrun.sh tests
+│   ├── test_config.sh              # Config parsing, placeholder substitution, encryption tests
 │   ├── TESTING_PROMPT.md           # Comprehensive code review and testing protocol
 │   └── vm/                          # VM test environment (uses --vm flag)
 │       ├── create-vm.sh             # VirtualBox VM creation
 │       └── test-vm.sh              # Run/monitor/SSH/stop
-├── README.md                        # Documentation
+├── README.md                        # Documentation (human-oriented)
+├── CHANGELOG.md                     # Version history (change log per release)
 ├── How-to-Update.md                 # Kernel update safety guide (7 phases with rollback)
 ├── Post-Install.md                  # Post-install operations (erase macOS, system update)
 ├── macpro-monitor/                  # Node.js webhook monitor
@@ -68,9 +75,6 @@ Ubuntu 24.04.4 LTS Server deployment and management tool for Mac Pro 2013 (MacPr
 │   ├── package.json                 # Node.js package manifest
 │   ├── start.sh / stop.sh / reset.sh
 │   └── logs/
-├── vm-test/                         # VirtualBox test environment (superseded by build-iso.sh --vm)
-│   ├── autoinstall-vm.yaml          # VM-specific autoinstall (Ethernet, non-fatal driver init)
-│   ├── build-iso-vm.sh              # VM ISO builder (use build-iso.sh --vm instead)
 └── prereqs/                         # Stock Ubuntu ISO (*.iso gitignored)
 
 # Runtime output: ~/.Ubuntu_Deployment/    # Generated files (ISO, autoinstall.yaml, deploy.conf)
@@ -80,7 +84,7 @@ Ubuntu 24.04.4 LTS Server deployment and management tool for Mac Pro 2013 (MacPr
 
 ### Build ISO
 ```bash
-sudo ./build-iso.sh
+sudo ./lib/build-iso.sh
 ```
 
 ### Deploy (interactive TUI)
@@ -124,12 +128,12 @@ cd macpro-monitor && ./start.sh    # Start (port 8080)
 ```bash
 cd tests/vm && sudo ./create-vm.sh && ./test-vm.sh
 # Or use build-iso.sh --vm:
-sudo ./build-iso.sh --vm
+sudo ./lib/build-iso.sh --vm
 ```
 
 ### Syntax check all shell scripts
 ```bash
-bash -n prepare-deployment.sh && bash -n lib/*.sh && bash -n build-iso.sh && bash -n tests/vm/*.sh
+bash -n prepare-deployment.sh && bash -n lib/*.sh && bash -n tests/vm/*.sh
 ```
 
 ### Run unit tests
@@ -252,7 +256,7 @@ Use `RED`, `GREEN`, `NC` color constants. Log to file with `tee`.
 - `LIBEFIVAR_OPS=efivarfs` set for all `efibootmgr` commands
 - Destructive operations require explicit user confirmation
 
-### YAML (autoinstall.yaml)
+### YAML (lib/autoinstall.yaml)
 - Use `|` block scalar for shell commands to avoid YAML parsing issues
 - Quote all strings containing special characters
 - Use auto-detected interface name in netplan (not `match:` — networkd does not support match: for wifis)
@@ -291,7 +295,7 @@ const MAX_UPDATES = 200;
 
 ## deploy.conf Configuration
 
-Runtime configuration file (KEY=VALUE format, gitignored). Copy `deploy.conf.example` to `deploy.conf` and customize.
+Runtime configuration file (KEY=VALUE format, gitignored). Copy `lib/deploy.conf.example` to `deploy.conf` and customize.
 
 ### Config File Format
 ```

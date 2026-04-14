@@ -8,24 +8,41 @@ Map the complete sourcing tree: which script sources which, in what order
 Trace the entry point initialization sequence step by step from first line to main()
 Document which modules are loaded before others and why that order matters
 Identify any modules that are conditionally sourced and under what conditions
+Verity: does the main script (prepare-deployment.sh) set `readonly SCRIPT_DIR` before sourcing lib/*.sh?
+Verify: do any lib/*.sh files re-assign SCRIPT_DIR when it's already readonly from the parent?
+Verify: does lib/detect.sh, lib/deploy.sh, and lib/autoinstall.sh all have the `SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "$0")" && pwd)}"` pattern?
+Verify: what happens when this defaults to the lib/ directory instead of the project root?
+Check: does build-iso.sh also set `readonly SCRIPT_DIR` and source from `$LIB_DIR`?
+Map: prepare-deployment.sh → colors.sh → logging.sh → tui.sh → dryrun.sh → retry.sh → verify.sh → rollback.sh → detect.sh → disk.sh → autoinstall.sh → bless.sh → deploy.sh → revert.sh (conditionally: remote.sh)
+Identify: which modules are conditionally sourced (remote.sh is `if [ -f ]`) and what breaks if they're absent
 0.2 Variable Namespace Collision Map
 List ALL `readonly` and `declare -r` declarations across every file
 List ALL `export`'d variables and trace which modules consume them
-Identify ALL shared variable names across modules (SCRIPT_DIR, LIB_DIR, ESP_NAME, etc.)
+Identify ALL shared variable names across modules (SCRIPT_DIR, LIB_DIR, ESP_NAME, ESP_SIZE, STORAGE_LAYOUT, NETWORK_TYPE, INTERNAL_DISK, APFS_CONTAINER, TARGET_DEVICE, DRY_RUN, AGENT_MODE, JSON_OUTPUT, CONFIRM_YES, OUTPUT_DIR, LOG_LEVEL, etc.)
 For each shared variable: document which module owns it, which modules read it, and whether any module attempts to reassign it
-Flag: any library that re-assigns a variable already declared `readonly` in a parent scope
+Flag: any library that re-assigns a variable already declared `readonly` in a parent scope (e.g., SCRIPT_DIR in detect.sh, deploy.sh, autoinstall.sh when sourced from prepare-deployment.sh)
+Verify: ESP_NAME is set as readonly in prepare-deployment.sh AND as a non-readonly default in disk.sh — is there a collision?
+Verify: ESP_SIZE is set as readonly in prepare-deployment.sh AND as a default in disk.sh — same pattern
 0.3 Function Namespace Map
 List ALL function definitions across every .sh file
-Identify any function name collisions across modules
-Identify any function that shadows a system command
+Identify any function name collisions across modules (e.g., are there any name collisions between lib/revert.sh and lib/rollback.sh?)
+Identify any function that shadows a system command (e.g., `log` in logging.sh shadows `/usr/bin/log` on macOS)
+Check: does `die()` in build-iso.sh conflict with `die()` from logging.sh?
+Check: do `warn()`, `error()`, `log()` aliases in build-iso.sh conflict with logging.sh versions?
 0.4 Guard Variable Audit
-Check every lib/*.sh for a guard variable (e.g., _COLORS_SH_SOURCED)
+Check every lib/*.sh for a guard variable (e.g., _COLORS_SH_SOURCED, _LOGGING_SH_SOURCED, etc.)
 List which modules have guards and which don't
 Determine if any module can be double-sourced and what would break
+Verify: if colors.sh is double-sourced, readonly RED/GREEN/etc. would fail — does the guard prevent this?
+Verify: lib/retry.sh has a one-line guard — does it properly prevent re-execution of the readonly declarations?
+Check: lib/tui.sh declares `readonly TUI_BACKEND`, `readonly TUI_HAS_GAUGE`, `readonly TUI_HAS_TAILBOX`, `readonly TUI_BACKTITLE` — what happens on double-source?
 0.5 Architecture Diagram
 Produce a dependency diagram: main script → libs → sub-libs
 Mark each edge with what is consumed (variables, functions)
 Highlight circular dependencies or fragile ordering assumptions
+Verify: rollback.sh depends on retry.sh and dryrun.sh — is this documented?
+Verify: deploy.sh sources nearly everything — is the order significant?
+Check: does build-iso.sh source a subset of libs? Which ones? Does it miss any it needs?
 
 PHASE 1: STATIC CODE ANALYSIS
 Before running static analysis, create a .shellcheckrc file:
@@ -39,8 +56,14 @@ All findings from this phase must be classified by severity:
 
 1.1 Syntax and Structure Validation
 Run syntax checks on ALL shell scripts: bash -n for each .sh file
-Run ShellCheck with full severity coverage: shellcheck -x --severity=warning
+Run ShellCheck with full severity coverage: shellcheck -x --severity=warning on ALL .sh files including:
+  - prepare-deployment.sh
+  - build-iso.sh
+  - Every file in lib/*.sh
+  - Every file in tests/vm/*.sh
+  - macpro-monitor/start.sh, stop.sh, reset.sh
 Run formatting validation: shfmt -i 2 -ci -bn -d
+Run Node.js syntax validation on macpro-monitor/server.js (node --check)
 Document EVERY warning, error, and suggestion — do not filter
 Classify each finding as P0/P1/P2/P3
 1.2 Variable and Scope Analysis
@@ -51,13 +74,29 @@ Check for variable naming conflicts between scripts/libraries (using Phase 0.2 m
 Verify all required environment variables are documented
 Identify any variable used before it is set (with set -u active)
 Check for variables that should be local but aren't
+Specific checks:
+  - VERIFY: In prepare-deployment.sh, line 16: `readonly SCRIPT_DIR` is set BEFORE sourcing lib/*.sh — do any of those libs also set SCRIPT_DIR?
+  - VERIFY: Line 17: `readonly ESP_NAME="CIDATA"` — but disk.sh line 15: `ESP_NAME="${ESP_NAME:-CIDATA}"` — is this a conflict?
+  - VERIFY: Line 18: `readonly ESP_SIZE="5g"` — but disk.sh line 16: `ESP_SIZE="${ESP_SIZE:-5g}"` — is this a conflict?
+  - VERIFY: Line 22: `readonly LIB_DIR="${LIB_DIR:-$SCRIPT_DIR/lib}"` — can LIB_DIR be overridden? What happens to subsequent `source "$LIB_DIR/..."` calls?
+  - CHECK: All `eval "$varname=..."` patterns in disk.sh, deploy.sh — are they safe with set -u?
+  - CHECK: `parse_conf()` reads deploy.conf line-by-line — what happens with empty values or values containing `=`?
+  - CHECK: `save_config()` writes deploy.conf — does it properly quote values containing spaces or special chars?
 1.3 Dependency Graph Mapping
 Map all function calls and their dependencies
-Identify all external command dependencies
+Identify all external command dependencies including:
+  - macOS-specific: diskutil, bless, sgdisk, newfs_msdos, tmutil, csrutil, fdesetup, sw_vers, security
+  - Linux-specific (for remote.sh): ssh, dkms, apt-get, dpkg, efibootmgr, systemctl, ufw, grub-*
+  - Cross-platform: xorriso, python3, curl, dd, comm, stat
 Check that all sourced files exist and are valid
 Document the execution order and call hierarchy
 Identify circular dependencies
 Verify that every function referenced in a case/esac or callback actually exists
+Specific checks:
+  - VERIFY: All functions referenced in prepare-deployment.sh's case statements (deploy_internal_partition, deploy_usb, deploy_manual, deploy_vm_test) are defined in lib/deploy.sh
+  - VERIFY: All functions referenced in _AGENT_OPERATIONS (remote_get_info, remote_kernel_status, etc.) are defined in lib/remote.sh
+  - VERIFY: All functions referenced in rollback PHASES_* constants are defined
+  - CHECK: build-iso.sh defines its own log/warn/error/die — are these compatible with logging.sh versions?
 1.4 Control Flow Analysis
 Trace all execution paths including error paths
 Identify unreachable code
@@ -66,95 +105,356 @@ Verify all conditionals cover their intended cases
 Check loop termination conditions
 Trace what happens when `set -e` encounters a failing command in a pipeline, subshell, or conditional
 Identify any `|| true` or `|| :` that might be swallowing real errors
+Specific checks:
+  - TRACE: What happens when deploy_internal_partition fails at phase _phase_generate_config? Does cleanup_on_error get called? Does the journal get destroyed?
+  - TRACE: What happens when build-iso.sh fails at step [4/5]? Does the staging directory get cleaned up? Does the trap fire?
+  - CHECK: The `run_phased` function in rollback.sh — when `is_dry_run` is true, it skips the phase function entirely. Does this mean journal phases are never recorded in dry-run mode? Is this correct?
+  - CHECK: In detect.sh, `select_usb_device` uses `eval` to set a variable by name — is this safe with user-controlled input?
+  - CHECK: In autoinstall.sh, `generate_autoinstall()` uses `sed -i` with both GNU and BSD syntax (`sed -i ... 2>/dev/null || sed -i '' ...`) — is this pattern correct for both platforms?
+  - CHECK: The `journal_set` function uses `eval` to read variable values — is the key validation regex sufficient to prevent injection (`^[a-zA-Z_][a-zA-Z0-9_]*$`)?
+  - CHECK: `retry_diskutil` checks stderr for "Resource busy" — are there other transient diskutil errors that should trigger retries?
+  - CHECK: `retry_xorriso` retries on I/O errors — does it properly clean up partial extraction directories on failure?
 
 PHASE 2: FUNCTIONAL BEHAVIOR TESTING
 2.1 Mode and Flag Testing
-Test EVERY command-line flag individually
-Test all flag combinations (pairwise testing)
-Verify help/version flags work correctly
-Test invalid flag handling and error messages
-Test all environment variable overrides
-Verify flags that are documented in --help actually exist in the argument parser
-Verify the argument parser handles --flag=value syntax for all applicable flags
+Test EVERY command-line flag in prepare-deployment.sh:
+  --dry-run, --verbose, --agent, --yes, --json
+  --method (1|2|3|4), --storage (1|2), --network (1|2)
+  --host, --operation, --wifi-ssid, --wifi-password
+  --webhook-host, --webhook-port
+  --username, --hostname, --vm, --revert, --help
+Test --flag=value syntax for all applicable flags (--method=1, --storage=2, etc.)
+Test invalid flag values: --method 5, --storage 3, --network 0
+Test missing required arguments: --method without value, --operation without value
+Test --help output matches actual flag implementation
+Test --revert flag standalone (should work without other flags)
+Test --build-iso flag (agent mode only)
+Verify exit codes match documentation (0=success, 1=general, 2=usage, etc.)
+Test build-iso.sh flags: --vm flag for VM mode, default behavior for production mode
 2.2 Execution Mode Testing
-Test dry-run/simulation modes for EVERY deployment method
+Test dry-run/simulation modes for EVERY deployment method:
+  --agent --dry-run --method 1 --storage 1 --network 1 (internal partition)
+  --agent --dry-run --method 2 --storage 1 --network 1 (USB)
+  --agent --dry-run --method 3 (manual)
+  --agent --dry-run --method 4 --vm (VM test)
 Verify dry-run produces ZERO side effects — audit every code path to ensure no destructive command executes when DRY_RUN=1
 Verify dry-run exits with code $E_DRY_RUN_OK (11)
-Test verbose/quiet modes
+Check specifically: does `dry_run_exec` wrap ALL destructive commands in lib/deploy.sh, lib/disk.sh, lib/bless.sh, lib/revert.sh?
+Check specifically: does `dry_run_callback` properly fall through to the real command when NOT in dry-run?
+Verify `dryrun.sh` guard variable prevents double-sourcing
+Test verbose/quiet modes (VERBOSE=1, LOG_LEVEL overrides)
 Test agent mode with --agent flag
 Test --agent --yes confirms destructive operations automatically
-Test --agent WITHOUT --yes denies destructive operations
-Test --json flag produces valid JSON output
+Test --agent WITHOUT --yes denies destructive operations (CONFIRM_YES=0)
+Test --json flag produces valid JSON output (validate with python3 -m json.tool)
+Test TUI fallback when dialog/whiptail are unavailable (TUI_BACKEND="raw")
 2.3 Normal Execution Path Testing
-Execute all primary workflows that can be safely executed
+Execute all primary workflows that can be safely executed:
+  prepare-deployment.sh --help
+  prepare-deployment.sh --dry-run --agent --method 1 --storage 1 --network 1 --yes --json
+  prepare-deployment.sh --dry-run --agent --method 2 --storage 2 --network 2 --yes --json
+  prepare-deployment.sh --agent --build-iso --json
+  prepare-deployment.sh --agent --operation kernel_status --host macpro-linux --json
 Test with valid inputs across boundary conditions
 Test file operations (create, read, modify, delete) where safe
-Test network operations (if applicable)
+Test network operations (webhook server start/stop)
 Test process execution and subprocess handling
+Test config file parsing: deploy.conf with all keys, empty values, missing file fallback to deploy.conf.example
+Test config file encryption modes: plaintext, aes256, keychain
+Test save_config and encrypt_config round-trip
 2.4 Error Path Testing
-Test with missing required arguments
-Test with invalid input types
-Test with missing/invalid file paths
-Test with insufficient permissions
-Test resource exhaustion scenarios
-Test network failures and timeouts
-Test dependency failures (missing commands, wrong versions)
+Test with missing required arguments (--method without value)
+Test with invalid input types (--method foo, --storage bar)
+Test with missing/invalid file paths (nonexistent ISO, missing prereqs/ directory)
+Test with insufficient permissions (running without sudo)
+Test resource exhaustion scenarios (disk full simulation, large ISO)
+Test network failures and timeouts (unreachable webhook host)
+Test dependency failures:
+  - Missing xorriso, sgdisk, python3, comm, diskutil
+  - Wrong versions of dependencies
+  - Missing dialog and whiptail (TUI_BACKEND="raw")
 Verify error messages are clear and actionable
-Verify exit codes match documented values
+Verify exit codes match documented values (E_SUCCESS=0 through E_AGENT_DENIED=13)
+Specific error path tests:
+  - What happens when analyze_disk_layout can't find the internal disk?
+  - What happens when detect_iso can't find any ISO file?
+  - What happens when select_usb_device finds no USB devices?
+  - What happens when APFS resize fails mid-operation?
+  - What happens when bless fails with SIP enabled (error 0xe00002e2)?
+  - What happens when xorriso extraction fails mid-stream?
+  - What happens when journal_init finds an existing incomplete state file?
+  - What happens when build-iso.sh can't find the base ISO?
+  - What happens when the DKMS patches series file lists a patch that doesn't exist?
 
 PHASE 3: INTEGRATION AND SYSTEM TESTING
 3.1 Script Interaction Testing
-Test scripts calling other scripts
+Test scripts calling other scripts:
+  - prepare-deployment.sh calls build-iso.sh via menu_build_iso
+  - prepare-deployment.sh sources all lib/*.sh files
+  - macpro-monitor/start.sh starts server.js
+  - tests/vm/create-vm.sh and test-vm.sh
 Test scripts sourcing libraries — verify sourcing order matches Phase 0.1
-Test scripts using shared resources
-Test scripts in different working directories
-Test scripts with relative vs absolute paths
+Test scripts using shared resources (state files, journal, ESP mount)
+Test scripts in different working directories (CWD != SCRIPT_DIR)
+Test scripts with relative vs absolute paths (LIB_DIR override)
+Test: does build-iso.sh work when run from a different directory than its location?
 3.2 Environment Testing
-Test with minimal environment (empty ENV)
-Test with missing dependencies
-Test with conflicting configurations
-Test with different shell versions (bash 3.2 vs 5.x)
-Test on all target platforms (macOS for build, Linux for remote)
+Test with minimal environment (empty ENV, no deploy.conf)
+Test with missing dependencies (xorriso not installed, python3 missing)
+Test with conflicting configurations (deploy.conf has WIFI_password with shell metacharacters)
+Test with different shell versions (bash 3.2 which ships on macOS vs bash 5.x)
+  - Specifically: test arrays in tui.sh (local -a), [[ ]] vs [ ], ${var,,} vs tr
+Test on all target platforms (macOS for build/deploy, Ubuntu for remote manage)
+Test: does build-iso.sh run correctly on Linux (where `stat -f%z` becomes `stat -c%s`)?
 3.3 Concurrency and State Testing
-Test scripts running simultaneously
-Test scripts modifying shared state
-Test idempotency (run multiple times)
-Test cleanup on interrupt (Ctrl-C, SIGTERM)
-Test cleanup on error exit
+Test scripts running simultaneously (two deploy instances, two monitor instances)
+Test scripts modifying shared state (journal file concurrent access)
+Test idempotency (run prepare-deployment.sh --dry-run multiple times)
+Test cleanup on interrupt (Ctrl-C) during each deployment phase
+Test cleanup on SIGTERM during deployment
 Verify trap handlers execute correctly in all exit scenarios
+Verify: does cleanup_on_error in prepare-deployment.sh properly call rollback_from_journal or revert_changes?
+Verify: does build-iso.sh's cleanup trap properly remove staging directory on failure?
 3.4 Resource Management
-Verify all temporary files are cleaned up
-Verify all file descriptors are closed
-Verify all background processes are terminated
+Verify all temporary files are cleaned up:
+  - build-iso.sh staging directory ($STAGING)
+  - retry_diskutil stderr temp files
+  - retry_ssh stderr temp files
+  - tui.sh temp files from _tui_mktemp
+  - journal state files in /var/tmp/macpro-deploy*
+Verify all file descriptors are closed (serial FD in logging.sh, tui temp file FDs)
+Verify all background processes are terminated (macpro-monitor start/stop)
 Verify all locks are released
-Verify proper handling of large files/datasets
+Verify proper handling of large files (ISO extraction ~3.4GB, ESP with limited space)
 
 PHASE 4: BEST PRACTICES AND PATTERNS
 4.1 Error Handling Audit
-Verify set -Eeuo pipefail usage (or equivalent)
-Check for proper error trapping: trap 'error_handler' ERR
+Verify set -Eeuo pipefail usage (or equivalent) in ALL scripts:
+  - prepare-deployment.sh: set -e, set -o pipefail, set -u
+  - build-iso.sh: set -e, set -o pipefail, set -u
+  - lib/*.sh: verify each has appropriate error handling
+Check for proper error trapping: trap 'cleanup_on_error' ERR in prepare-deployment.sh, trap cleanup EXIT in build-iso.sh
 Verify all external commands have error handling
-Check for proper exit codes
+Check for proper exit codes (E_SUCCESS through E_AGENT_DENIED)
 Verify error messages are clear and actionable
+Specific checks:
+  - VERIFY: `set -e` behavior with `|| die` patterns — does the script exit immediately on failure or does die() handle it?
+  - CHECK: In build-iso.sh, `xorriso -report_el_torito as_mkisofs` output is eval'd — is the injection check (`grep -qE '[;&|${}()]`) sufficient?
+  - CHECK: In rollback.sh, `journal_set` uses `eval` to reconstruct state — is this safe given the regex key validation?
+  - CHECK: In remote.sh, all destructive operations (kernel pin, apt sources changes) use `dry_run_exec` — are there any that don't?
+  - CHECK: In remote.sh, `remote_kernel_update` is interactive (uses tui_confirm) — how does this work in agent mode?
+  - CHECK: In remote.sh, some functions use `read -rp` for confirmation (non-TUI) while others use `tui_confirm` — is this inconsistent?
 4.2 Safety and Security Review
-Check for proper input validation and sanitization
+
+4.2.1 Input Validation and Sanitization
+Check for proper input validation and sanitization on ALL user-facing inputs
 Verify no unsafe use of eval or source with user input
-Check for proper quoting of ALL variable expansions
-Verify safe handling of temporary files/directories
-Check for proper permission handling
-Verify no hardcoded credentials or secrets
+Trace every tui_input / tui_password / deploy.conf value from entry point to execution
+Verify user-supplied values (SSID, password, ISO path, device path) are quoted in every command they reach
+Check for proper quoting of ALL variable expansions — every "$VAR" must be quoted, every unquoted $VAR is a finding
+Test every user input field with shell metacharacters: ; | & $ ` ' " \n \t space and Unicode
+Test every user input field with YAML metacharacters: : - [ ] { } & * ! % @ `
+Test every user input field with path traversal: ../  /etc/passwd  /dev/sda
+
+4.2.2 Credential and Secret Handling
+Trace every path where credentials appear: deploy.conf → autoinstall.yaml → netplan → ESP
+Verify WiFi SSID and password are NEVER written to log files
+Verify WiFi password is never visible in process args (ps output)
+Verify SSH_AUTHORIZED_KEYS are not logged
+Verify deploy.conf permissions (should be 600, not world-readable)
+Verify autoinstall.yaml on ESP is not world-readable (note: FAT32 limitation)
+Check if any error message or debug output leaks credential values
+Audit all printf/echo/log statements that reference variables containing secrets
+Verify gitignore covers deploy.conf and any other files containing credentials
+Check that --wifi-password flag value is not visible in process listing (/proc/cmdline, ps)
+Specific checks:
+  - VERIFY: In autoinstall.sh, line 244: `sed -i "s#__WIFI_PASSWORD__#${escaped_password}#g"` — is the escaping sufficient? What if password contains `#` or `/`?
+  - VERIFY: In autoinstall.sh, line 227-240: SSH_KEYS are split by newline and inserted into YAML — are special characters in SSH keys handled?
+  - CHECK: Does `log()` or `log_info()` ever log WIFI_SSID or WIFI_PASSWORD values?
+  - CHECK: Does `agent_output()` ever include credential values in its JSON output?
+  - CHECK: In save_config(), WIFI_PASSWORD is written in plaintext — verify chmod 600 is applied after
+
+4.2.3 Command Injection Attack Surface
+This script runs as root (sudo). Any path from user input to command execution is root-level code execution.
+Map every path from user-controlled input to shell command execution
+Check: do any user inputs reach diskutil, xorriso, dd, sgdisk, newfs_msdos without proper quoting?
+Check: does eval usage (e.g., return-by-name pattern in disk.sh deploy.sh detect.sh) allow injection through variable values?
+Check: can any deploy.conf value break out of its intended context? (e.g., WIFI_SSID containing shell metacharacters used in autoinstall.yaml early-commands)
+Check: are autoinstall.yaml early-commands and late-commands properly escaped when they contain variable interpolation?
+Verify: every command constructed with user input uses proper quoting or array form
+Specific checks:
+  - TRACE: WIFI_SSID from deploy.conf → exported → used in autoinstall.sh sed replacement → embedded in YAML early-commands → executed by sh -c in installer
+  - TRACE: USB device path from select_usb_device → diskutil, sgdisk commands in disk.sh deploy.sh — is it properly quoted?
+  - TRACE: ISO path from detect_iso → xorriso command — is it properly quoted?
+  - CHECK: In autoinstall.sh, python3 -c blocks receive $OUTPUT_PATH — is this safe from injection?
+  - CHECK: In remote.sh, remote__exec constructs SSH commands — are all arguments properly quoted for the remote shell?
+
+4.2.4 YAML Injection
+User-controlled SSID and password get string-replaced into autoinstall.yaml
+Test: can special characters in SSID/password break YAML parsing or inject arbitrary keys?
+Test: can a SSID like 'sshd: enabled' inject YAML keys?
+Test: can a password containing a colon or newline break the autoinstall structure?
+Verify: the autoinstall generation properly escapes or quotes all user-controlled values
+Check: does the YAML generation use printf with proper quoting, or does it use heredocs that might allow expansion?
+Verify: netplan YAML generation (inside autoinstall early-commands) properly escapes SSID/password
+Specific checks:
+  - VERIFY: generate_autoinstall() uses sed for placeholder replacement — test with SSID containing `#`, `/`, `&`, `\`
+  - VERIFY: The `generate_dualboot_storage()` Python script uses subprocess.run with sgdisk — is disk_dev properly validated before passing to sgdisk?
+  - CHECK: autoinstall.yaml early-commands are executed by `sh -c` in the installer — are all variable interpolations safe?
+
+4.2.5 Supply Chain Integrity
+The packages/ directory contains 34 .deb files installed via dpkg on the target system
+Verify: are any .deb checksums or signatures validated before installation?
+Document: what is the current trust model for packages/ (assumed: trusted source + git)
+Check: could a malicious .deb in packages/ achieve root execution on the target?
+Assess: is there a mechanism to verify package integrity (sha256sums, signatures)?
+Check: are dkms-patches applied without integrity verification?
+Recommend: add checksum verification for .deb files if not present
+Verify: build-iso.sh checks for `.deb` file count but not integrity
+
+4.2.6 Privilege Escalation and Execution Context
+Map every code path that runs as root (via sudo or in autoinstall context)
+Identify all autoinstall early-commands and late-commands — these run as root in the installer
+Verify: no autoinstall command downloads and executes arbitrary code from the internet
+Verify: no autoinstall command exposes a network service unnecessarily
+Check: does the webhook listener (macpro-monitor) accept connections from any interface? (HOST = '0.0.0.0')
+Check: is the webhook URL (containing potential secrets) logged or stored insecurely?
+Verify: SSH connections in remote.sh properly validate host keys (NOT StrictHostKeyChecking=no)
+
+4.2.7 TOCTOU and Race Conditions
+Identify all check-then-act sequences (e.g., check disk exists → modify disk)
+Check: diskutil list → diskutil addPartition — can partition layout change between calls?
+Check: diskutil info → diskutil apfs resizeContainer — can container change between calls?
+Check: verify_esp_mount → write to ESP — can ESP be unmounted between calls?
+Document: which race conditions are acceptably unlikely vs which need mitigation
+Check: are lock files or other serialization mechanisms used for shared resources?
+
+4.2.8 Filesystem and Permission Security
+Verify: temporary files created with mktemp (not predictable paths in /tmp)
+Verify: temporary directories created with safe permissions (not world-readable)
+Verify: ESP mount point permissions (note: FAT32 has no Unix permissions)
+Verify: journal files (.Ubuntu_Deployment/, /var/tmp/macpro-deploy-state.env) are not world-readable
+Verify: log files do not contain credentials or sensitive configuration
+Check: are cleanup trap handlers robust against partial state (e.g., ESP mounted but not formatted)?
+Specific checks:
+  - VERIFY: retry_diskutil and retry_ssh use mktemp for stderr files — are they cleaned up in all paths?
+  - VERIFY: tui.sh _tui_mktemp uses mktemp but falls back to /tmp/tui_$$ — is this safe?
+  - VERIFY: rollback.sh STATE_FILE at /var/tmp/macpro-deploy-state.env — is this world-readable?
+  - VERIFY: build-iso.sh STAGING directory at /tmp/macpro-iso-staging or /tmp/vmtest-iso-staging — predictable path vulnerability?
+  - CHECK: Is /var/tmp/macpro-deploy-state.env cleaned up by journal_destroy on success?
+
+4.2.9 Network Security
+Verify: SSH connections use key-based auth, not password-in-command-line
+Verify: SSH config does not disable StrictHostKeyChecking
+  - CHECK: remote.sh line 40 uses `-o StrictHostKeyChecking=no` in remote__exec — this is INSECURE
+  - CHECK: remote.sh line 55 uses `ssh -o ConnectTimeout=10 -o BatchMode=yes` without StrictHostKeyChecking=no — but also doesn't verify host keys
+Verify: webhook server (macpro-monitor) does not expose sensitive data without auth
+  - CHECK: server.js listens on 0.0.0.0 by default — accessible from any network
+  - CHECK: server.js has rate limiting (RATE_LIMIT_MAX_REQUESTS = 10 per second) — is this sufficient?
+  - CHECK: server.js sanitizes input (sanitizeString, sanitizeProgress) — test with XSS payloads
+Check: can the webhook URL be used to inject false progress reports or trigger actions?
+Verify: no credentials transmitted in plaintext over network (webhook is HTTP, not HTTPS)
+Macpro-monitor specific security checks:
+  - Test: POST to /webhook with malformed JSON — does it handle gracefully or crash?
+  - Test: POST to /webhook with oversized body (>256KB) — is it rejected?
+  - Test: GET /api/progress — does it expose any sensitive data?
+  - Test: Can XSS be injected through webhook progress messages? (check escapeHtml usage)
+  - Check: ALLOWED_ORIGINS environment variable — default empty means CORS allows any origin
+
+4.2.10 Autoinstall Environment Security
+Review all early-commands in autoinstall.yaml (and autoinstall-vm.yaml) for security implications
+Verify: no early-command writes to locations outside the target filesystem
+Verify: no early-command creates setuid binaries
+Verify: no early-command modifies SSH configuration to allow root login with password
+  - CHECK: early-commands start SSH server with `useradd -m -s /bin/bash ubuntu` and `echo "ubuntu:ubuntu" | chpasswd` — this creates a known password!
+Verify: late-commands do not leave backdoors or disable security features
+Check: is UFW configuration applied in late-commands correct and restrictive?
+Check: is the kernel pin mechanism (apt preferences) tamper-resistant?
+
 4.3 Portability Review
-Check for bashisms if POSIX compatibility required
+Check for bashisms if POSIX compatibility required (note: scripts use bash 3.2 features, not POSIX)
 Verify GNU vs BSD command compatibility (macOS uses BSD, Ubuntu uses GNU)
+  - CHECK: `stat -f%z` in detect_iso (line 38) — macOS syntax. Does this work on Linux? (Linux uses `stat -c%s`)
+  - CHECK: `sed -i` patterns in autoinstall.sh use both GNU (`sed -i s/.../`) and BSD (`sed -i '' s/.../`) syntax — are both covered?
+  - CHECK: `diskutil` is macOS-only — does remote.sh use any diskutil commands for Linux?
+  - CHECK: `sgdisk` usage — is it available on both macOS (via Homebrew) and Ubuntu?
 Check for hardcoded paths
-Verify proper shebang lines
-Check for platform-specific code paths
-4.4 Documentation Review
-Verify all functions have usage documentation
-Verify all scripts have help text
-Verify all dependencies are documented
-Verify all environment variables are documented
-Verify all error codes are documented
+  - VERIFY: Are there any hardcoded absolute paths that won't work on both platforms?
+  - CHECK: /tmp paths in build-iso.sh, logging.sh, retry.sh are they appropriate for both platforms?
+  - CHECK: /var/tmp paths in rollback.sh — are they writable on both platforms?
+Verify proper shebang lines (#!/bin/bash on all .sh files)
+Check for platform-specific code paths:
+  - VERIFY: Does logging.sh properly detect platform (Darwin vs Linux) for serial device paths?
+  - VERIFY: Does detect_iso's stat command handle both macOS and Linux?
+  - CHECK: Does remote.sh's SSH command construction work with both macOS and Linux SSH clients?
+
+4.4 Documentation Consistency and Accuracy Review
+
+This project maintains three documentation files with distinct audiences:
+- **AGENTS.md** — For LLM agents and automated tools: architecture, constraints, code conventions, implementation details
+- **README.md** — For humans: usage instructions, quick start, troubleshooting, feature descriptions
+- **CHANGELOG.md** — For everyone: version-by-version record of what changed
+
+4.4.1 Delineation Enforcement
+Verify each document contains its audience delineation header
+Verify AGENTS.md header states: "for LLM agents and automated tools" and cross-references README.md and CHANGELOG.md
+Verify README.md header states: "for humans" and cross-references AGENTS.md and CHANGELOG.md
+Verify CHANGELOG.md header explains its purpose as the version history record
+Verify no document contains content that belongs in another (see 4.4.2–4.4.4)
+
+4.4.2 Content Boundary Audit
+AGENTS.md MUST contain (and README.md must NOT duplicate):
+  - Code style guidelines (naming conventions, set -e patterns, etc.)
+  - Module API descriptions (each lib/*.sh function signature and behavior)
+  - deploy.conf parsing internals (IFS behavior, KEY=VALUE split semantics)
+  - Key Constraints section (hardware limitations, platform quirks)
+  - Context Management Rules (memory, context reduction, session notes)
+  - YAML generation internals (string replacement vs yaml.dump, block scalar handling)
+  - DKMS Patch Architecture (install order, symlink behavior, patch guards)
+
+README.md MUST contain (and AGENTS.md must NOT duplicate):
+  - Quick Start guide
+  - Prerequisites and installation commands (brew install ...)
+  - Troubleshooting section
+  - Monitoring stages table (human-readable progress descriptions)
+  - Risk assessment and mitigations section
+  - Switching between macOS and Ubuntu table
+  - Serial console instructions
+  - VM test environment usage
+
+CHANGELOG.md MUST contain (and neither other doc should duplicate):
+  - Version-by-version change lists
+  - What was added/changed/fixed in each release
+  - Corresponding git tag for each entry
+
+BOTH documents should contain (with appropriate framing for their audience):
+  - Deployment method descriptions (README: how to use, AGENTS: method codes, phase names, internals)
+  - Agent mode CLI flags (README: usage examples, AGENTS: flag implementation details)
+  - Exit codes (README: table with meanings, AGENTS: constant names and values)
+  - deploy.conf keys (README: what each key means, AGENTS: parsing behavior, encryption modes)
+
+4.4.3 Accuracy Verification
+Verify AGENTS.md project structure tree matches actual filesystem (ls -R)
+Verify AGENTS.md lib/*.sh descriptions match actual function signatures
+Verify AGENTS.md Key Constraints are still accurate (no stale hardware assumptions)
+Verify README.md deployment method numbers match --method flag values (1=ESP, 2=USB, 3=manual, 4=VM)
+Verify README.md --help output matches actual prepare-deployment.sh --help output
+Verify README.md agent mode operations table matches actual _AGENT_OPERATIONS in code
+Verify deploy.conf.example documents ALL keys that parse_conf() accepts
+Verify Exit code documentation in --help matches E_* constants in dryrun.sh
+Verify DKMS patch instructions in How-to-Update.md match actual patches in packages/dkms-patches/
+Verify Post-Install.md covers all manage mode operations from lib/remote.sh
+Verify CHANGELOG.md version tags correspond to actual git tags (git tag --list)
+Verify CHANGELOG.md entries match commit messages at each tag (git log -1 <tag>)
+
+4.4.4 Stale Content Detection
+Scan all documentation for references to removed/renamed files, functions, or variables
+Check for documentation describing features that no longer exist
+Check for documentation referencing old default values
+Check for TODO/FIXME/NOTE/HACK markers that should be resolved or documented
+Verify no documentation references bug fixes or changes — those belong in CHANGELOG.md
+Verify no documentation contains version-specific deltas — those belong in CHANGELOG.md
+Verify vm-test/ section in AGENTS.md reflects that vm-test/ is superseded by --vm flag
 
 PHASE 5: EXECUTION AND VALIDATION
 SAFETY BOUNDARIES — classify every testable unit before execution:
@@ -163,22 +463,80 @@ DESTRUCTIVE (only via --dry-run flag or in VirtualBox): disk partitioning, APFS 
 REMOTE-ONLY (requires ssh access to target): all lib/remote.sh operations, manage mode
 VM-REQUIRED: deploy_vm_test, VirtualBox operations
 
-5.1 Actual Execution Testing
-Execute scripts within their safety boundary classification
-Execute scripts with production-like data where safe
-Monitor resource usage (CPU, memory, I/O)
-Verify execution completes within expected time bounds
+5.1 Deployment Path Testing
+For EACH deployment method, test the complete flow in dry-run mode:
+
+METHOD 1: Internal Partition (ESP)
+  - prepare-deployment.sh --agent --dry-run --method 1 --storage 1 --network 1 --yes --json
+  - prepare-deployment.sh --agent --dry-run --method 1 --storage 2 --network 1 --yes --json
+  - prepare-deployment.sh --agent --dry-run --method 1 --storage 1 --network 2 --yes --json
+  - prepare-deployment.sh --agent --dry-run --method 1 --storage 2 --network 2 --yes --json
+  - Verify: all phases (analyze → shrink_apfs → create_esp → extract_iso → copy_pkgs → generate_config → verify_bless) are walked in dry-run
+  - Verify: generate_autoinstall produces valid YAML for each storage/network combination
+  - Verify: generate_dualboot_storage produces valid YAML with preserve:true entries for dual-boot
+
+METHOD 2: USB
+  - prepare-deployment.sh --agent --dry-run --method 2 --storage 1 --network 1 --yes --json
+  - Verify: all phases (detect_usb → partition_usb → extract_iso_usb → copy_pkgs_usb → generate_config_usb → verify_usb) are walked
+  - Verify: USB device selection works in agent mode (auto-selects first device)
+
+METHOD 3: Full Manual
+  - prepare-deployment.sh --agent --dry-run --method 3 --yes --json
+  - Verify: prompts for ISO path and USB device, creates standard Ubuntu USB
+
+METHOD 4: VM Test
+  - prepare-deployment.sh --agent --dry-run --method 4 --vm --yes --json
+  - Verify: all phases (check_vbox → find_iso → build_iso → create_vm → start_monitor) are walked
+  - Verify: VM-specific autoinstall is used (autoinstall-vm.yaml)
+
+Build ISO
+  - prepare-deployment.sh --agent --build-iso --dry-run --json
+  - Verify: ISO build steps are walked in dry-run
+
+Manage Mode Operations
+  - prepare-deployment.sh --agent --operation kernel_status --host macpro-linux --json
+  - prepare-deployment.sh --agent --operation sysinfo --host macpro-linux --json
+  - prepare-deployment.sh --agent --operation driver_status --host macpro-linux --json
+  - (These are remote-only, will fail without target — verify error handling)
+
+Revert
+  - prepare-deployment.sh --revert (requires prior failed deployment state)
+
 5.2 Failure Mode Testing
-Inject failures at critical points
-Test recovery mechanisms
-Verify rollback works correctly
-Test cleanup on failure
-Verify logs/reports are accurate after failure
-5.3 Stress and Boundary Testing
-Test with minimum/maximum input sizes
-Test with empty inputs
-Test with malformed inputs
-Test with special characters in inputs
+For each deployment path, inject failures at critical points:
+  - METHOD 1: What happens if APFS resize fails mid-operation? Does rollback restore original size?
+  - METHOD 1: What happens if ESP creation succeeds but ISO extraction fails? Does cleanup remove the ESP partition?
+  - METHOD 2: What happens if USB partition creation succeeds but ISO extraction to USB fails?
+  - METHOD 4: What happens if VM creation succeeds but ISO copy fails?
+Test recovery mechanisms:
+  - journal_init should detect and offer to resume from previous incomplete state
+  - rollback_from_journal should properly roll back based on recorded phase
+  - handle_phase_failure should collect error context and offer recovery instructions
+Verify rollback works correctly for each deployment method (rollback_internal, rollback_usb, rollback_vm)
+Test cleanup on failure:
+  - SIGINT during deploy: does cleanup_on_error fire? Does it call rollback?
+  - SIGTERM during deploy: same test
+  - Verify trap handlers in prepare-deployment.sh and build-iso.sh
+Verify logs/reports are accurate after failure:
+  - STATE_FILE should contain last completed phase
+  - ERROR_REPORT_FILE should contain system state at failure point
+  - collect_error_context should gather disk, mount, SIP, FileVault info
+
+5.3 Node.js Monitor Testing
+Test macpro-monitor/server.js independently:
+  - Start server: node server.js
+  - POST /webhook with valid JSON progress event
+  - POST /webhook with built-in Subiquity event format
+  - GET / to verify HTML dashboard renders
+  - GET /api/progress to verify JSON API
+  - Test rate limiting: send >10 requests/second from same IP
+  - Test CORS headers: verify Access-Control-Allow-Origin
+  - Test XSS prevention: POST with <script>alert(1)</script> in message field
+  - Test stall detection: start with progress, wait >5 minutes, verify STALLED state
+  - Test graceful shutdown: SIGTERM, verify server closes and saves state
+  - Test persistence: start server, POST events, restart server, verify events are loaded from logs/progress.json
+  - Test WebSocket refresh: verify dashboard auto-refreshes every 3 seconds
+  - Test body size limit: POST >256KB, verify 413 response
 
 ITERATIVE FIX AND TEST CYCLE
 Process findings in severity order: P0 first, then P1, then P2, then P3.
@@ -201,9 +559,13 @@ For each bug:
    Phase 5: Re-run all execution tests
    Document any NEW findings introduced by the fix
 
-3. Version Control
+3. Version Control and Documentation
    When all phases pass for a fix:
    Query current version: git tag --list 'v0.2.*' | sort -V | tail -1
+   Append CHANGELOG.md entry under next version:
+     ### v0.2.X — [brief description]
+     - fix: [specific change]
+     - fix: [specific change]
    Stage changes: git add -A
    Commit with descriptive message:
      fix: [brief description]
@@ -241,6 +603,10 @@ Before completion, verify:
  All scripts pass ShellCheck with zero errors
  All command-line flags tested individually and in combination
  All execution modes tested (dry-run, verbose, agent, json)
+ All 4 deployment methods tested in dry-run mode (method 1/2/3/4 × storage 1/2 × network 1/2)
+ All manage mode operations tested
+ Build ISO path tested
+ Revert path tested
  All readonly/export variable collisions resolved
  All guard variables present and effective
  All lib modules source-compatible with main script's declarations
@@ -252,3 +618,24 @@ Before completion, verify:
  All integration scenarios tested
  Architecture model (Phase 0) still accurate after all fixes
  All commits properly tagged on v0.2.* sequence and pushed
+ No credentials leaked in logs, error messages, or process args
+ All user inputs validated and quoted in every execution path
+ deploy.conf permissions are 600 (not world-readable)
+ YAML injection tested — SSID/password cannot break autoinstall structure
+ Command injection tested — no user input reaches shell execution unquoted
+ SSH connections validate host keys (no StrictHostKeyChecking=no in production)
+ Autoinstall early/late-commands reviewed — no backdoors or unsafe downloads
+ Webhook server does not expose sensitive data without authentication
+ Supply chain: .deb integrity verification mechanism documented or implemented
+ TOCTOU race conditions identified and mitigated where feasible
+ Node.js monitor tested — XSS, rate limiting, body size, persistence
+ macpro-monitor CORS and security headers verified
+ Server.js stall detection and graceful shutdown verified
+ AGENTS.md has LLM audience delineation header with cross-references
+ README.md has human audience delineation header with cross-references
+ CHANGELOG.md exists and covers all tagged versions
+ No bug fix histories or change logs in AGENTS.md or README.md
+ AGENTS.md project structure tree matches actual filesystem
+ README.md --method values match actual code implementation
+ deploy.conf.example documents all parse_conf() keys
+ Documentation accuracy verified against actual code behavior
