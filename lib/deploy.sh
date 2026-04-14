@@ -170,8 +170,9 @@ _phase_verify_bless() {
         log "Recovery Mode workaround: boot to Recovery (Cmd+R), run 'csrutil enable --without nvram', then retry"
         return 1
     fi
-    local BLESS_OK
-    BLESS_OK=$(attempt_bless "$ESP_MOUNT" "$_ESP_DEVICE")
+    # attempt_bless tries systemsetup/bless methods; result is verified independently
+    attempt_bless "$ESP_MOUNT" "$_ESP_DEVICE" >/dev/null
+    # verify_bless_result re-checks via bless --info --getboot (independent verification)
     if ! verify_bless_result "$ESP_MOUNT"; then
         warn "Bless verification failed — manual boot selection required"
         log "Recovery Mode workaround: boot to Recovery (Cmd+R), run 'csrutil enable --without nvram', then retry"
