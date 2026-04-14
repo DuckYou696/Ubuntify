@@ -297,6 +297,14 @@ const MAX_UPDATES = 200;
 
 **Files:** `snake_case.sh`, `snake_case.js`
 
+## Versioning
+
+- Format: `v0.2.N` where N increments sequentially (v0.2.0, v0.2.1, v0.2.2, ...)
+- **Every commit must have a version tag** — no untagged commits on main
+- Tags are assigned in chronological order (oldest commit = lowest N)
+- Version series MUST stay on v0.2.* — do NOT iterate to v0.3.* or higher without explicit user permission
+- When creating a commit, immediately tag it with the next sequential v0.2.N number
+
 ## deploy.conf Configuration
 
 Runtime configuration file (KEY=VALUE format). Lives in `~/.Ubuntu_Deployment/deploy.conf` (created on first run). Template at `lib/deploy.conf.example`.
