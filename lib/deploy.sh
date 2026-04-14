@@ -195,7 +195,7 @@ preflight_checks() {
     local SIP_STATUS
     SIP_STATUS=$(csrutil status 2>/dev/null | grep -o 'enabled\|disabled' | head -1 || echo "unknown")
     if [ "$SIP_STATUS" = "enabled" ]; then
-        info "SIP is enabled — bless will be attempted but may fail"
+        log_info "SIP is enabled — bless will be attempted but may fail"
     fi
 
     # Check FileVault

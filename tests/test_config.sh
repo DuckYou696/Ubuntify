@@ -110,6 +110,10 @@ parse_conf() {
         local value="${line#*=}"
         key="${key#"${key%%[![:space:]]*}"}"
         key="${key%"${key##*[![:space:]]}"}"
+        # Strip surrounding double quotes from value (KEY="value" format)
+        case "$value" in
+            \"*\") value="${value#\"}"; value="${value%\"}" ;;
+        esac
         [ -z "$key" ] && continue
         case "$key" in
             USERNAME)       USERNAME="$value" ;;
@@ -287,6 +291,37 @@ else
     TESTS_FAIL=$((TESTS_FAIL + 1))
     echo "  FAIL: autoinstall-schema.json not found in lib/"
 fi
+
+# ── Test save_config → parse_conf round-trip with quoted values ──
+
+echo "=== Test: config round-trip (quoted values) ==="
+
+ROUNDTRIP_CONF="$TMPDIR/roundtrip.conf"
+cat > "$ROUNDTRIP_CONF" <<'CONFEOF'
+USERNAME="testround"
+REALNAME="Round Trip"
+HOSTNAME="roundtrip-host"
+PASSWORD_HASH="$6$salt$hash"
+WIFI_SSID="TestWiFi Round"
+WIFI_PASSWORD="passwithspecial"
+ENCRYPTION="plaintext"
+OUTPUT_DIR=""
+CONFEOF
+
+# Re-initialize variables for round-trip test
+USERNAME="" REALNAME="" HOSTNAME="" PASSWORD_HASH=""
+WIFI_SSID="" WIFI_PASSWORD="" WEBHOOK_HOST="" WEBHOOK_PORT=""
+ENCRYPTION="plaintext" OUTPUT_DIR="" SSH_KEYS="" SSH_KEYS_FILE=""
+
+parse_conf "$ROUNDTRIP_CONF"
+
+assert_eq "Round-trip USERNAME" "testround" "$USERNAME"
+assert_eq "Round-trip REALNAME" "Round Trip" "$REALNAME"
+assert_eq "Round-trip HOSTNAME" "roundtrip-host" "$HOSTNAME"
+assert_eq "Round-trip WIFI_SSID" "TestWiFi Round" "$WIFI_SSID"
+assert_eq "Round-trip WIFI_PASSWORD" "passwithspecial" "$WIFI_PASSWORD"
+
+rm -f "$ROUNDTRIP_CONF"
 
 # ── Summary ──
 

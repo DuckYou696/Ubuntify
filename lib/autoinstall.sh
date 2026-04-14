@@ -203,11 +203,18 @@ with open('$OUTPUT_PATH', 'w') as f:
     # Helper: escape special chars for sed replacement with # delimiter
     # Must escape: \ (escape char), & (pattern repeat), # (delimiter), / (common in URLs)
     _sed_escape() {
+        # Escape sed replacement special chars: &, \, #, /
         printf '%s\n' "$1" | sed 's/[&\\\/#]/\\&/g'
     }
 
     _sed_escape_yaml_dq() {
-        printf '%s\n' "$1" | sed 's/[&\\\/#"]/\\&/g'
+        # Escape for YAML double-quoted strings: backslash, double-quote,
+        # newline, tab, ampersand, hash. Newlines and tabs become \n and \t
+        # (YAML escape sequences). Trailing newline stripped for sed.
+        printf '%s' "$1" | sed -e ':a' -e 'N' -e '$!ba' \
+            -e 's/\\/\\\\/g' -e 's/"/\\"/g' \
+            -e 's/\n/\\n/g' -e 's/\t/\\t/g' \
+            -e 's/&/\\&/g' -e 's/#/\\#/g'
     }
 
 

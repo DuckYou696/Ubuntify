@@ -78,6 +78,10 @@ parse_conf() {
         # Trim leading/trailing whitespace from key
         key="${key#"${key%%[![:space:]]*}"}"
         key="${key%"${key##*[![:space:]]}"}"
+        # Strip surrounding double quotes from value (KEY="value" format)
+        case "$value" in
+            \"*\") value="${value#\"}"; value="${value%\"}" ;;
+        esac
         # Skip empty keys
         [ -z "$key" ] && continue
         case "$key" in
