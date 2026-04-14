@@ -190,13 +190,35 @@ prompt_config() {
             agent_error "SSH_KEY or SSH_KEYS_FILE required in deploy.conf"
             missing=1
         else
-            local key
-            key=$(tui_input "SSH Public Key" "Enter SSH public key (or path to authorized_keys):" "")
-            if [ -f "$key" ]; then
-                SSH_KEYS_FILE="$key"
-            elif [ -n "$key" ]; then
-                SSH_KEYS="$key"
-            fi
+            local ssh_choice
+            ssh_choice=$(prompt_ssh_key_menu) || { ssh_choice="skip"; }
+            case "$ssh_choice" in
+                existing)
+                    local selected_key
+                    selected_key=$(prompt_ssh_key_selection)
+                    if [ "$selected_key" = "SKIP" ]; then
+                        warn "SSH keys skipped by user"
+                    elif [ "$selected_key" = "MANUAL" ]; then
+                        local manual_key
+                        manual_key=$(tui_input "SSH Public Key" "Paste your SSH public key:" "")
+                        if [ -n "$manual_key" ]; then
+                            SSH_KEYS="$manual_key"
+                        fi
+                    elif [ -n "$selected_key" ]; then
+                        SSH_KEYS="$selected_key"
+                    fi
+                    ;;
+                generate)
+                    local generated_key
+                    generated_key=$(prompt_generate_key)
+                    if [ -n "$generated_key" ]; then
+                        SSH_KEYS="$generated_key"
+                    fi
+                    ;;
+                skip)
+                    warn "No SSH keys configured. You will need console access to the Mac Pro."
+                    ;;
+            esac
         fi
     fi
     if [ -z "$WIFI_SSID" ]; then
@@ -226,6 +248,10 @@ prompt_config() {
         WEBHOOK_PORT="${WEBHOOK_PORT:-8080}"
     fi
 
+    if [ "$AGENT_MODE" -ne 1 ]; then
+        configure_ssh_config
+    fi
+
     if [ "$missing" -eq 1 ]; then
         return 1
     fi
@@ -234,6 +260,286 @@ prompt_config() {
     export USERNAME REALNAME PASSWORD_HASH HOSTNAME SSH_KEYS SSH_KEYS_FILE
     export WIFI_SSID WIFI_PASSWORD WEBHOOK_HOST WEBHOOK_PORT WHURL
     return 0
+}
+
+# ── SSH Key Management Functions ──
+
+scan_ssh_keys() {
+    local key_files=""
+    for f in ~/.ssh/*.pub; do
+        if [ -f "$f" ]; then
+            key_files="${key_files}${key_files:+
+}${f}"
+        fi
+    done
+    echo "$key_files"
+}
+
+get_key_comment() {
+    local key_path="$1"
+    if [ -f "$key_path" ]; then
+        cut -d' ' -f3 "$key_path" 2>/dev/null | head -1
+    fi
+}
+
+get_key_type() {
+    local key_path="$1"
+    if [ -f "$key_path" ]; then
+        cut -d' ' -f1 "$key_path" 2>/dev/null | cut -d'-' -f2 | head -1
+    fi
+}
+
+prompt_ssh_key_selection() {
+    local available_keys
+    available_keys=$(scan_ssh_keys)
+
+    if [ -z "$available_keys" ]; then
+        return 1
+    fi
+
+    local key_count=0
+    local key_files=""
+    local key_labels=""
+
+    while IFS= read -r key_file; do
+        [ -z "$key_file" ] && continue
+        key_count=$((key_count + 1))
+        local key_type
+        key_type=$(get_key_type "$key_file")
+        local key_comment
+        key_comment=$(get_key_comment "$key_file")
+        local label
+        label=$(basename "$key_file")
+        if [ -n "$key_comment" ]; then
+            label="${label} (${key_type}, ${key_comment})"
+        else
+            label="${label} (${key_type})"
+        fi
+        key_files="${key_files}${key_files:+|}${key_file}"
+        key_labels="${key_labels}${key_labels:+|}${label}"
+    done <<EOF
+$available_keys
+EOF
+
+    if [ "$key_count" -eq 0 ]; then
+        return 1
+    fi
+
+    # Build menu items using positional args for tui_menu
+    # tui_menu takes pairs: "Display Text" "tag_value"
+    local menu_args=""
+    local idx=1
+    local IFS_OLD="$IFS"
+    IFS='|'
+    for label in $key_labels; do
+        menu_args="${menu_args} \"${label}\" \"${idx}\""
+        idx=$((idx + 1))
+    done
+    IFS="$IFS_OLD"
+    menu_args="${menu_args} \"Paste key manually...\" \"manual\" \"Skip SSH keys\" \"skip\""
+
+    local selection
+    selection=$(eval "tui_menu \"SSH Public Key\" \"Select SSH public key to use:\" $menu_args") || return 1
+
+    if [ "$selection" = "skip" ]; then
+        echo "SKIP"
+        return 0
+    elif [ "$selection" = "manual" ]; then
+        echo "MANUAL"
+        return 0
+    fi
+
+    # Find the selected key file by index
+    local target_idx=$((selection - 1))
+    local current_idx=0
+    local selected_path=""
+    IFS='|'
+    for path in $key_files; do
+        if [ "$current_idx" -eq "$target_idx" ]; then
+            selected_path="$path"
+            break
+        fi
+        current_idx=$((current_idx + 1))
+    done
+    IFS="$IFS_OLD"
+
+    if [ -n "$selected_path" ]; then
+        cat "$selected_path"
+    fi
+}
+
+prompt_ssh_key_menu() {
+    local choice
+    choice=$(tui_menu "SSH Key Configuration" "Choose how to provide SSH public key:" \
+        "Provide existing key" "existing" \
+        "Generate new key" "generate" \
+        "Skip SSH setup" "skip") || return 1
+    echo "$choice"
+}
+
+prompt_generate_key() {
+    local key_type_choice
+    key_type_choice=$(tui_menu "Generate SSH Key" "Select key type:" \
+        "ed25519 (recommended)" "ed25519" \
+        "rsa (4096-bit)" "rsa") || return 1
+
+    local key_file="$HOME/.ssh/macpro_ubuntu_${key_type_choice}"
+    local key_path="${key_file}.pub"
+
+    if [ -f "$key_file" ]; then
+        if ! tui_confirm "Key Exists" "Key $key_file already exists.\n\nOverwrite?"; then
+            return 1
+        fi
+    fi
+
+    mkdir -p "$HOME/.ssh"
+    chmod 700 "$HOME/.ssh"
+
+    log_info "Generating SSH key pair: $key_type_choice..."
+    if [ "$key_type_choice" = "ed25519" ]; then
+        ssh-keygen -t ed25519 -C "macpro-ubuntu-$(date +%Y%m%d)" -f "$key_file" -N "" 2>/dev/null || {
+            warn "Failed to generate ed25519 key"
+            return 1
+        }
+    else
+        ssh-keygen -t rsa -b 4096 -C "macpro-ubuntu-$(date +%Y%m%d)" -f "$key_file" -N "" 2>/dev/null || {
+            warn "Failed to generate RSA key"
+            return 1
+        }
+    fi
+
+    log_info "Key generated: $key_file"
+    if [ -f "$key_path" ]; then
+        cat "$key_path"
+    fi
+}
+
+configure_ssh_config() {
+    local ssh_config="$HOME/.ssh/config"
+    local macpro_ip=""
+    local user="$USERNAME"
+
+    if [ -z "$user" ]; then
+        user="ubuntu"
+    fi
+
+    local needs_config=0
+    local has_macpro=0
+    local has_macpro_linux=0
+
+    if [ -f "$ssh_config" ]; then
+        while IFS= read -r line; do
+            case "$line" in
+                *"Host macpro"*) has_macpro=1 ;;
+                *"Host macpro-linux"*) has_macpro_linux=1 ;;
+            esac
+        done < "$ssh_config"
+    fi
+
+    if [ "$has_macpro" -eq 0 ] || [ "$has_macpro_linux" -eq 0 ]; then
+        needs_config=1
+    fi
+
+    if [ "$needs_config" -eq 0 ]; then
+        return 0
+    fi
+
+    if ! tui_confirm "SSH Config" "Would you like to add Host entries to ~/.ssh/config for:\n\n  Host macpro (macOS)\n  Host macpro-linux (Ubuntu via mDNS)\n\nThis makes SSH connections easier."; then
+        return 0
+    fi
+
+    if [ "$has_macpro" -eq 0 ]; then
+        macpro_ip=$(tui_input "macOS Host IP" "Enter macOS IP address (or leave empty to skip):" "")
+    fi
+
+    mkdir -p "$HOME/.ssh"
+    chmod 700 "$HOME/.ssh"
+
+    if [ -f "$ssh_config" ]; then
+        while IFS= read -r line; do
+            case "$line" in
+                "# macpro-deploy"*|"# End macpro-deploy"*)
+                    continue
+                    ;;
+            esac
+            echo "$line"
+        done < "$ssh_config" > "$ssh_config.tmp" 2>/dev/null || true
+        mv "$ssh_config.tmp" "$ssh_config" 2>/dev/null || true
+    fi
+
+    {
+        echo ""
+        echo "# macpro-deploy generated entries"
+        if [ "$has_macpro" -eq 0 ] && [ -n "$macpro_ip" ]; then
+            echo "Host macpro"
+            echo "    HostName $macpro_ip"
+            echo "    User $user"
+            echo ""
+        fi
+        if [ "$has_macpro_linux" -eq 0 ]; then
+            echo "Host macpro-linux"
+            echo "    HostName macpro-linux.local"
+            echo "    User $user"
+            echo ""
+        fi
+        echo "# End macpro-deploy"
+    } >> "$ssh_config"
+
+    chmod 600 "$ssh_config"
+    log_info "SSH config updated: $ssh_config"
+}
+
+# ── Pre-execution Summary ──
+
+show_pre_execution_summary() {
+    local storage_method="$1"
+    local network_method="$2"
+
+    local method_name="Unknown"
+    case "${DEPLOY_METHOD:-}" in
+        1) method_name="Internal partition (ESP)" ;;
+        2) method_name="USB drive" ;;
+        3) method_name="Full manual" ;;
+        4) method_name="VM test (VirtualBox)" ;;
+    esac
+
+    local storage_name="Unknown"
+    case "$storage_method" in
+        1) storage_name="Dual-boot (preserve macOS)" ;;
+        2) storage_name="Full disk (replace macOS)" ;;
+    esac
+
+    local network_name="Unknown"
+    case "$network_method" in
+        1) network_name="WiFi only" ;;
+        2) network_name="Ethernet available" ;;
+    esac
+
+    local ssh_key_count=0
+    if [ -n "$SSH_KEYS" ]; then
+        while IFS= read -r key; do
+            [ -n "$key" ] && ssh_key_count=$((ssh_key_count + 1))
+        done <<EOF
+$SSH_KEYS
+EOF
+    fi
+
+    local summary=""
+    summary="Configuration Summary:\n\n"
+    summary="${summary}Username:    ${USERNAME}\n"
+    summary="${summary}Hostname:    ${HOSTNAME}\n"
+    summary="${summary}Real Name:   ${REALNAME}\n"
+    summary="${summary}WiFi SSID:   ${WIFI_SSID:-(not set)}\n"
+    summary="${summary}Webhook:     ${WEBHOOK_HOST}:${WEBHOOK_PORT}\n"
+    summary="${summary}SSH Keys:    ${ssh_key_count} key(s)\n"
+    summary="${summary}\n"
+    summary="${summary}Deployment Method: ${method_name}\n"
+    summary="${summary}Storage Layout:      ${storage_name}\n"
+    summary="${summary}Network Type:        ${network_name}\n"
+    summary="${summary}\n"
+    summary="${summary}Proceed with deployment?"
+
+    tui_confirm "Confirm Configuration" "$summary"
 }
 
 save_config() {
@@ -254,7 +560,9 @@ CONFEOF
         while IFS= read -r key; do
             [ -z "$key" ] && continue
             echo "SSH_KEY=\"$key\"" >> "$conf"
-        done <<< "$SSH_KEYS"
+        done <<EOF
+$SSH_KEYS
+EOF
     fi
     if [ -n "$SSH_KEYS_FILE" ]; then
         echo "SSH_KEYS_FILE=\"$SSH_KEYS_FILE\"" >> "$conf"
@@ -319,7 +627,7 @@ decrypt_config() {
 show_help() {
     echo "Usage: sudo ./prepare-deployment.sh [OPTIONS]"
     echo ""
-    echo "Mac Pro 2013 Ubuntu Server Deployment Tool v0.2.13"
+    echo "Mac Pro 2013 Ubuntu Server Deployment Tool v0.2.16"
     echo ""
     echo "Options:"
     echo "  --dry-run             Show what would be done without making changes"
@@ -486,28 +794,7 @@ menu_deploy() {
         NETWORK_TYPE="$network"
     fi
 
-    local summary="Configuration summary:\n\n"
-    case "$DEPLOY_METHOD" in
-        1) summary+="Method: Internal partition (ESP)\n" ;;
-        2) summary+="Method: USB drive\n" ;;
-        3) summary+="Method: Full manual\n" ;;
-        4) summary+="Method: VM test (VirtualBox)\n" ;;
-    esac
-
-    if [ "$DEPLOY_METHOD" != "3" ] && [ "$DEPLOY_METHOD" != "4" ]; then
-        case "$STORAGE_LAYOUT" in
-            1) summary+="Storage: Dual-boot (preserve macOS)\n" ;;
-            2) summary+="Storage: Full disk (replace macOS)\n" ;;
-        esac
-        case "$NETWORK_TYPE" in
-            1) summary+="Network: WiFi only\n" ;;
-            2) summary+="Network: Ethernet available\n" ;;
-        esac
-    fi
-
-    summary+="\nProceed with deployment?"
-
-    if ! tui_confirm "Confirm Settings" "$summary"; then
+    if ! show_pre_execution_summary "$STORAGE_LAYOUT" "$NETWORK_TYPE"; then
         return 1
     fi
 
@@ -1101,7 +1388,7 @@ main() {
     trap 'cleanup_on_error; exit 130' SIGINT
     trap 'cleanup_on_error; exit 143' SIGTERM
 
-    log_info "Mac Pro 2013 Ubuntu Deployment Tool v0.2.13 starting..."
+    log_info "Mac Pro 2013 Ubuntu Deployment Tool v0.2.16 starting..."
     log_info "Log file: $(log_get_file_path)"
     log_info "TUI backend: $TUI_BACKEND"
 

@@ -43,14 +43,13 @@ Mac Pro has no Ethernet. Broadcom BCM4360 WiFi requires a proprietary `wl` drive
 
 | File | Purpose |
 |------|---------|
-| `autoinstall.yaml` | Autoinstall config — WiFi driver compilation, SSH, dual-boot storage layout |
-| `build-iso.sh` | Builds modified ISO: extract, overlay, repack preserving EFI boot |
+| `lib/autoinstall.yaml` | Autoinstall config template — WiFi driver compilation, SSH, dual-boot storage layout |
+| `lib/build-iso.sh` | Builds modified ISO: extract, overlay, repack preserving EFI boot |
 | `packages/` | .deb files for driver compilation (34 packages) |
 | `packages/dkms-patches/` | 6 DKMS patches for kernel 6.8+ compatibility (series file + *.patch) |
 | `prepare-deployment.sh` | Interactive deployment script: ESP partition, USB, manual, or VM test |
 | `prereqs/` | Stock Ubuntu 24.04.4 Server ISO (`*.iso` gitignored) |
 | `macpro-monitor/` | Node.js webhook server for installation monitoring (3-pane dashboard) |
-| `vm-test/` | VirtualBox test environment for DKMS compilation validation |
 | `CHANGELOG.md` | Version history — what changed in each release |
 | `AGENTS.md` | Architecture and implementation details for LLM agents and automation tools |
 
@@ -70,7 +69,7 @@ brew install xorriso gptfdisk python3
 ### Build the ISO (required for all methods)
 
 ```bash
-sudo ./build-iso.sh
+sudo ./lib/build-iso.sh
 ```
 
 ### Deploy (interactive menu)
@@ -115,7 +114,7 @@ cd macpro-monitor && ./start.sh
 
 ### What's Added to the ISO
 
-1. `/autoinstall.yaml` — installation configuration
+1. `/autoinstall.yaml` — installation configuration (generated from `lib/autoinstall.yaml` template)
 2. `/cidata/` — NoCloud datasource for `ds=nocloud` discovery
 3. `/macpro-pkgs/` — 34 .deb files for driver compilation
 4. `/macpro-pkgs/dkms-patches/` — 6 DKMS compatibility patches for broadcom-sta on kernel 6.8+
@@ -137,7 +136,7 @@ The `broadcom-sta-dkms` package (`6.30.223.271-23ubuntu1`) does not compile on k
 
 Patches use `#if LINUX_VERSION_CODE >= KERNEL_VERSION(...)` guards. Applied via `series` file in dependency order. **Do NOT call `dkms add` explicitly** — the postinst already does this.
 
-### autoinstall.yaml Key Sections
+### lib/autoinstall.yaml Key Sections
 
 **early-commands** (before network, in installer environment):
 1. Detect running kernel dynamically → validate matching headers exist
@@ -259,7 +258,7 @@ The `macpro-monitor/` server provides a real-time 3-pane dashboard (Subiquity Ev
 
 ### Security: WiFi Credentials
 
-WiFi SSID and password are in plain text in `autoinstall.yaml` and on the FAT32 ESP. Mitigations: UFW firewall denies all incoming except SSH, ESP is only accessible during install. Future improvement: inject credentials via environment variable at deploy time.
+WiFi SSID and password are in plain text in the generated `autoinstall.yaml` (on the FAT32 ESP during install). Mitigations: UFW firewall denies all incoming except SSH, ESP is only accessible during install. Credentials come from `deploy.conf` (encrypted at rest) and are substituted into the template at build time.
 
 ## VM Test Environment
 
