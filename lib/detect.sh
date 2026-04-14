@@ -61,7 +61,7 @@ detect_usb_devices() {
 }
 
 select_usb_device() {
-    local -n _TARGET_DEVICE=$1
+    local _target_device_name="$1"
 
     local usb_devices
     usb_devices=$(detect_usb_devices)
@@ -98,7 +98,8 @@ select_usb_device() {
                 ;;
         esac
         if [ "$choice" -ge 1 ] && [ "$choice" -le "$i" ]; then
-            _TARGET_DEVICE="${device_list[$((choice-1))]}"
+            local _target_device_val="${device_list[$((choice-1))]}"
+            eval "$_target_device_name=\"\$_target_device_val\""
             break
         fi
         echo "Invalid choice. Please enter a number between 1 and $i."
@@ -106,11 +107,11 @@ select_usb_device() {
 
     # Get device size
     local device_size
-    device_size=$(diskutil info "$_TARGET_DEVICE" 2>/dev/null | grep "Total Size" | grep -oE '[0-9]+\.[0-9]+ GB' | head -1 || echo "unknown")
-    log "Selected USB device: $_TARGET_DEVICE ($device_size)"
+    device_size=$(diskutil info "$_target_device_val" 2>/dev/null | grep "Total Size" | grep -oE '[0-9]+\.[0-9]+ GB' | head -1 || echo "unknown")
+    log "Selected USB device: $_target_device_val ($device_size)"
 
     echo ""
-    echo "WARNING: All data on $_TARGET_DEVICE will be erased!"
+    echo "WARNING: All data on $_target_device_val will be erased!"
     read -rp "Type 'yes' to confirm: " confirm
     if [ "$confirm" != "yes" ]; then
         die "USB device selection cancelled"

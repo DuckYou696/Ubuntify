@@ -16,43 +16,47 @@ ESP_SIZE="${ESP_SIZE:-5g}"
 STORAGE_LAYOUT="${STORAGE_LAYOUT:-1}"
 
 analyze_disk_layout() {
-    local -n _INTERNAL_DISK=$1
-    local -n _APFS_CONTAINER=$2
+    local _internal_disk_name="$1"
+    local _apfs_container_name="$2"
 
     log "Analyzing disk layout..."
 
     local APFS_PARTITION
     local FREE_SPACE
+    local _internal_disk_val
+    local _apfs_container_val
 
-    _INTERNAL_DISK=$(diskutil list | grep -E 'internal.*physical' | head -1 | grep -oE '/dev/disk[0-9]+' || true)
-    [ -n "$_INTERNAL_DISK" ] || die "Cannot identify internal disk"
+    _internal_disk_val=$(diskutil list | grep -E 'internal.*physical' | head -1 | grep -oE '/dev/disk[0-9]+' || true)
+    [ -n "$_internal_disk_val" ] || die "Cannot identify internal disk"
 
-    log "Internal disk: $_INTERNAL_DISK"
-    diskutil list "$_INTERNAL_DISK"
+    log "Internal disk: $_internal_disk_val"
+    diskutil list "$_internal_disk_val"
     echo ""
 
-    # Find APFS container
-    APFS_PARTITION=$(diskutil list "$_INTERNAL_DISK" | grep -i "APFS" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
+    APFS_PARTITION=$(diskutil list "$_internal_disk_val" | grep -i "APFS" | grep -oE 'disk[0-9]+s[0-9]+' | head -1 || true)
     if [ -n "$APFS_PARTITION" ]; then
-        _APFS_CONTAINER=$(diskutil info "$APFS_PARTITION" 2>/dev/null | grep -i "container" | grep -oE 'disk[0-9]+' | head -1 || true)
+        _apfs_container_val=$(diskutil info "$APFS_PARTITION" 2>/dev/null | grep -i "container" | grep -oE 'disk[0-9]+' | head -1 || true)
     fi
-    if [ -z "$_APFS_CONTAINER" ]; then
-        _APFS_CONTAINER=$(diskutil list | grep -i "APFS" | grep -oE 'disk[0-9]+' | head -1 || true)
+    if [ -z "$_apfs_container_val" ]; then
+        _apfs_container_val=$(diskutil list | grep -i "APFS" | grep -oE 'disk[0-9]+' | head -1 || true)
     fi
-    if [ -n "$_APFS_CONTAINER" ]; then
+    if [ -n "$_apfs_container_val" ]; then
         FREE_SPACE=$(diskutil apfs list 2>/dev/null | grep -A5 "Capacity" | grep "Available" | grep -oE '[0-9]+.*B' | head -1 || true)
         log "APFS partition: /dev/${APFS_PARTITION:-unknown}"
-        log "APFS container: /dev/$_APFS_CONTAINER"
+        log "APFS container: /dev/$_apfs_container_val"
         log "Free space: ${FREE_SPACE:-unknown}"
     fi
     echo ""
+
+    eval "$_internal_disk_name=\"\$_internal_disk_val\""
+    eval "$_apfs_container_name=\"\$_apfs_container_val\""
 }
 
 shrink_apfs_if_needed() {
     local APFS_CONTAINER="$1"
     local INTERNAL_DISK="$2"
-    local -n _APFS_RESIZED=$3
-    local -n _APFS_ORIGINAL_SIZE=$4
+    local _apfs_resized_name="$3"
+    local _apfs_original_size_name="$4"
 
     if [ "${DRY_RUN:-0}" -eq 1 ]; then
         log "[DRY RUN] Would shrink APFS container if needed"
@@ -76,7 +80,9 @@ shrink_apfs_if_needed() {
     local SNAP_UUID
 
     CURRENT_SIZE=$(diskutil info "$APFS_CONTAINER" 2>/dev/null | grep "Disk Size" | grep -oE '[0-9]+(\.[0-9]+)? GB' || true)
-    _APFS_ORIGINAL_SIZE=$(echo "$CURRENT_SIZE" | grep -oE '[0-9]+(\.[0-9]+)?' || true)
+    local _apfs_original_size_val
+    _apfs_original_size_val=$(echo "$CURRENT_SIZE" | grep -oE '[0-9]+(\.[0-9]+)?' || true)
+    eval "$_apfs_original_size_name=\"\$_apfs_original_size_val\""
     log "Current APFS size: ${CURRENT_SIZE:-unknown}"
 
     EXISTING_FREE_GB=$(diskutil list "$INTERNAL_DISK" 2>/dev/null | grep "(free" | grep -oE '[0-9]+(\.[0-9]+)? GB' | head -1 | grep -oE '[0-9]+(\.[0-9]+)?' || true)
@@ -126,14 +132,14 @@ shrink_apfs_if_needed() {
     fi
 
     diskutil apfs resizeContainer "$APFS_CONTAINER" "${TARGET_MACOS_GB}g" || die "APFS resize failed"
-    _APFS_RESIZED=1
+    eval "$_apfs_resized_name=1"
     log "APFS container resized to ${TARGET_MACOS_GB}GB"
 }
 
 create_esp_partition() {
     local INTERNAL_DISK="$1"
-    local -n _ESP_CREATED=$2
-    local -n _ESP_DEVICE=$3
+    local _esp_created_name="$2"
+    local _esp_device_name="$3"
 
     if [ "${DRY_RUN:-0}" -eq 1 ]; then
         log "[DRY RUN] Would create ESP partition on $INTERNAL_DISK"
@@ -156,23 +162,25 @@ create_esp_partition() {
     BEFORE_PARTS=$(diskutil list "$INTERNAL_DISK" | grep -oE 'disk[0-9]+s[0-9]+' | sort)
     diskutil addPartition "$INTERNAL_DISK" %C12A7328-F81F-11D2-BA4B-00A0C93EC93B% %noformat% "$ESP_SIZE" || \
         die "Failed to create ESP partition with EFI System Partition type"
-    _ESP_CREATED=1
+    eval "$_esp_created_name=1"
     sleep 2
     AFTER_PARTS=$(diskutil list "$INTERNAL_DISK" | grep -oE 'disk[0-9]+s[0-9]+' | sort)
-    _ESP_DEVICE=$(comm -13 <(echo "$BEFORE_PARTS") <(echo "$AFTER_PARTS") | head -1)
-    [ -n "$_ESP_DEVICE" ] || die "Cannot identify newly created ESP partition"
+    local _esp_device_val
+    _esp_device_val=$(comm -13 <(echo "$BEFORE_PARTS") <(echo "$AFTER_PARTS") | head -1)
+    eval "$_esp_device_name=\"\$_esp_device_val\""
+    [ -n "$_esp_device_val" ] || die "Cannot identify newly created ESP partition"
 
-    log "ESP partition candidate: /dev/$_ESP_DEVICE"
+    log "ESP partition candidate: /dev/$_esp_device_val"
 
     # Format as FAT32 with newfs_msdos
-    newfs_msdos -F 32 -v "$ESP_NAME" "/dev/$_ESP_DEVICE" || die "Failed to format ESP as FAT32"
+    newfs_msdos -F 32 -v "$ESP_NAME" "/dev/$_esp_device_val" || die "Failed to format ESP as FAT32"
     sleep 1
 
     # Mount the freshly formatted ESP
-    diskutil mount "/dev/$_ESP_DEVICE" 2>/dev/null || true
+    diskutil mount "/dev/$_esp_device_val" 2>/dev/null || true
     ESP_MOUNT="/Volumes/$ESP_NAME"
     if [ ! -d "$ESP_MOUNT" ]; then
-        ESP_MOUNT=$(diskutil info "/dev/$_ESP_DEVICE" 2>/dev/null | grep "Mount Point" | awk '{$1=$2=""; print substr($0,3)}' | sed 's/^[[:space:]]*//' || true)
+        ESP_MOUNT=$(diskutil info "/dev/$_esp_device_val" 2>/dev/null | grep "Mount Point" | awk '{$1=$2=""; print substr($0,3)}' | sed 's/^[[:space:]]*//' || true)
     fi
     [ -d "$ESP_MOUNT" ] || die "ESP not mounted after format"
 
