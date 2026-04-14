@@ -14,33 +14,30 @@ autoinstall:
     # Kernel pin preferences moved to late-commands — pin-priority: -1 here blocks curtin from installing the kernel
 
   identity:
-    hostname: macpro-linux
-    username: teja
-    realname: Teja
-    password: "$6$8PBS0yfUxUSfQKeT$E/vFyIsiCGGe3iJ5GskGXYRdf4/9FSE1KugDfQvjf2Rp3ZwCprpDgVRKyzCZIZJKBKX2iEB6T5krscDlnRqq81"
+    hostname: __HOSTNAME__
+    username: __USERNAME__
+    realname: __REALNAME__
+    password: "__PASSWORD_HASH__"
 
   ssh:
     install-server: true
     allow-pw: true
     authorized-keys:
-      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHC+HpN9l4rWjhILAseecXpN5xVe4eYxAKgf6RjsoJwi remote-access-20250923
-      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGceithSleqWG+lmbCb+8fI9lRQqN/Fho8ZN/E6X2Fx3 llorderbot-remote-deploy
-      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ2yBFJ3qh6zUR5Xi9IK17YMlrr57DgWOQBdCUywr3GH djtchill@Ch3atC0de
-      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOQ37O+h9gTmyE/z8eWMWflSDEzbZz/ojoEkalinYc06
+      __SSH_KEYS__
 
   reporting:
     builtin:
       type: print
     macpro-monitor:
       type: webhook
-      endpoint: "http://192.168.1.115:8080/webhook"
+      endpoint: "__WHURL__"
       level: DEBUG
 
   early-commands:
     - |
       set -x
       LOG="/run/macpro.log"
-      WHURL="http://192.168.1.115:8080/webhook"
+      WHURL="__WHURL__"
       wh() { curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1 || true; }
       die() { echo "[early] FATAL: $1" >> "$LOG"; wh "{\"progress\":${2:-0},\"stage\":\"early\",\"status\":\"failed\",\"message\":\"FATAL: $1\"}"; exit 1; }
       log() { echo "[early] $1" >> "$LOG"; }
@@ -247,7 +244,7 @@ autoinstall:
         echo "ubuntu:ubuntu" | chpasswd 2>/dev/null || true
         mkdir -p /home/ubuntu/.ssh 2>/dev/null || true
         : > /home/ubuntu/.ssh/authorized_keys 2>/dev/null || true
-        for _key in "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHC+HpN9l4rWjhILAseecXpN5xVe4eYxAKgf6RjsoJwi remote-access-20250923" "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGceithSleqWG+lmbCb+8fI9lRQqN/Fho8ZN/E6X2Fx3 llorderbot-remote-deploy" "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ2yBFJ3qh6zUR5Xi9IK17YMlrr57DgWOQBdCUywr3GH djtchill@Ch3atC0de" "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOQ37O+h9gTmyE/z8eWMWflSDEzbZz/ojoEkalinYc06"; do
+        for _key in __SSH_KEYS_LIST__; do
           echo "$_key" >> /home/ubuntu/.ssh/authorized_keys 2>/dev/null || true
         done
         chmod 700 /home/ubuntu/.ssh 2>/dev/null || true
@@ -255,7 +252,7 @@ autoinstall:
         chown -R ubuntu:ubuntu /home/ubuntu/.ssh 2>/dev/null || true
         mkdir -p /run/sshd
         /usr/sbin/sshd -D -e &
-        log "SSH server started (installer user: ubuntu, pass: ubuntu; target user: teja)"
+        log "SSH server started (installer user: ubuntu, pass: ubuntu; target user: __USERNAME__)"
         wh '{"progress":25,"stage":"prep-ssh","status":"ready","message":"SSH server ready — early-commands complete"}'
       else
         log "WARNING: Could not start SSH server"
@@ -394,7 +391,7 @@ autoinstall:
       KVER="$(uname -r)"
       ABI_VER="${KVER%-generic}"
       LOG="/run/macpro.log"
-      WHURL="http://192.168.1.115:8080/webhook"
+      WHURL="__WHURL__"
       wh() { curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1 || true; }
       die() { echo "[late] FATAL: $1" >> "$LOG"; wh "{\"progress\":${2:-29},\"stage\":\"late\",\"status\":\"failed\",\"message\":\"FATAL: $1\"}"; exit 1; }
       log() { echo "[late] $1" >> "$LOG"; }
@@ -576,7 +573,7 @@ autoinstall:
     - |
       # sh -c block — must redefine helpers (wh/die/log)
       LOG="/run/macpro.log"
-      WHURL="http://192.168.1.115:8080/webhook"
+      WHURL="__WHURL__"
       wh() { curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1 || true; }
       die() { echo "[late] FATAL: $1" >> "$LOG"; wh "{\"progress\":${2:-70},\"stage\":\"late\",\"status\":\"failed\",\"message\":\"FATAL: $1\"}"; exit 1; }
       log() { echo "[late] $1" >> "$LOG"; }
@@ -604,7 +601,7 @@ autoinstall:
     - |
       # sh -c block — must redefine helpers (wh/die/log)
       LOG="/run/macpro.log"
-      WHURL="http://192.168.1.115:8080/webhook"
+      WHURL="__WHURL__"
       wh() { curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1 || true; }
       die() { echo "[late] FATAL: $1" >> "$LOG"; wh "{\"progress\":${2:-75},\"stage\":\"late\",\"status\":\"failed\",\"message\":\"FATAL: $1\"}"; exit 1; }
       log() { echo "[late] $1" >> "$LOG"; }
@@ -647,7 +644,7 @@ autoinstall:
     - |
       # sh -c block — must redefine helpers (wh/die/log)
       LOG="/run/macpro.log"
-      WHURL="http://192.168.1.115:8080/webhook"
+      WHURL="__WHURL__"
       wh() { curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1 || true; }
       die() { echo "[late] FATAL: $1" >> "$LOG"; wh "{\"progress\":${2:-80},\"stage\":\"late\",\"status\":\"failed\",\"message\":\"FATAL: $1\"}"; exit 1; }
       log() { echo "[late] $1" >> "$LOG"; }
@@ -665,7 +662,7 @@ autoinstall:
       KVER="$(uname -r)"
       ABI_VER="${KVER%-generic}"
       LOG="/run/macpro.log"
-      WHURL="http://192.168.1.115:8080/webhook"
+      WHURL="__WHURL__"
       wh() { curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1 || true; }
       die() { echo "[late] FATAL: $1" >> "$LOG"; wh "{\"progress\":${2:-85},\"stage\":\"late\",\"status\":\"failed\",\"message\":\"FATAL: $1\"}"; exit 1; }
       log() { echo "[late] $1" >> "$LOG"; }
@@ -714,7 +711,7 @@ autoinstall:
     - |
       # sh -c block — must redefine helpers (wh/die/log)
       LOG="/run/macpro.log"
-      WHURL="http://192.168.1.115:8080/webhook"
+      WHURL="__WHURL__"
       wh() { curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1 || true; }
       die() { echo "[late] FATAL: $1" >> "$LOG"; wh "{\"progress\":${2:-88},\"stage\":\"late\",\"status\":\"failed\",\"message\":\"FATAL: $1\"}"; exit 1; }
       log() { echo "[late] $1" >> "$LOG"; }
@@ -731,19 +728,19 @@ autoinstall:
     - |
       # sh -c block — must redefine helpers (wh/die/log)
       LOG="/run/macpro.log"
-      WHURL="http://192.168.1.115:8080/webhook"
+      WHURL="__WHURL__"
       wh() { curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1 || true; }
       die() { echo "[late] FATAL: $1" >> "$LOG"; wh "{\"progress\":${2:-90},\"stage\":\"late\",\"status\":\"failed\",\"message\":\"FATAL: $1\"}"; exit 1; }
       log() { echo "[late] $1" >> "$LOG"; }
 
-      wh '{"progress":90,"stage":"late-sudo","status":"configuring","message":"Configuring sudo for user teja"}'
-      echo "teja ALL=(ALL) NOPASSWD:ALL" > /target/etc/sudoers.d/teja
-      chmod 440 /target/etc/sudoers.d/teja
+      wh '{"progress":90,"stage":"late-sudo","status":"configuring","message":"Configuring sudo for user __USERNAME__"}'
+      echo "__USERNAME__ ALL=(ALL) NOPASSWD:ALL" > /target/etc/sudoers.d/__USERNAME__
+      chmod 440 /target/etc/sudoers.d/__USERNAME__
 
     - |
       # sh -c block — must redefine helpers (wh/die/log)
       LOG="/run/macpro.log"
-      WHURL="http://192.168.1.115:8080/webhook"
+      WHURL="__WHURL__"
       wh() { curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1 || true; }
       die() { echo "[late] FATAL: $1" >> "$LOG"; wh "{\"progress\":${2:-97},\"stage\":\"late\",\"status\":\"failed\",\"message\":\"FATAL: $1\"}"; exit 1; }
       log() { echo "[late] $1" >> "$LOG"; }
@@ -810,7 +807,7 @@ autoinstall:
 
   error-commands:
     - |
-      WHURL="http://192.168.1.115:8080/webhook"
+      WHURL="__WHURL__"
       wh() { curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1 || true; }
 
       modprobe wl 2>/dev/null || true
@@ -818,7 +815,7 @@ autoinstall:
       WIFI_DEV=$(ip link show 2>/dev/null | grep -oE 'wl[^:]+' | head -1)
       [ -n "$WIFI_DEV" ] && ip link set "$WIFI_DEV" up 2>/dev/null || true
     - |
-      WHURL="http://192.168.1.115:8080/webhook"
+      WHURL="__WHURL__"
       wh() { curl -s -X POST "$WHURL" -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1 || true; }
       LOG="/run/macpro.log"
       _dump_log() { cat "$LOG" > /dev/console 2>/dev/null || true; }

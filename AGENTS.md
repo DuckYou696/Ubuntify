@@ -23,6 +23,7 @@ Ubuntu 24.04.4 LTS Server deployment and management tool for Mac Pro 2013 (MacPr
 ├── prepare-deployment.sh             # Main entry point — TUI with Deploy + Manage modes
 ├── autoinstall.yaml                 # Autoinstall configuration (base template — WiFi + dual-boot)
 ├── build-iso.sh                     # ISO builder (xorriso extract-and-repack) — called as subprocess
+├── deploy.conf                      # Runtime config (KEY=VALUE, gitignored)
 ├── deploy.conf.example              # WiFi/webhook config template (copy to deploy.conf)
 ├── lib/                             # Modular library
 │   ├── colors.sh                    # Color constants (RED, GREEN, YELLOW, NC) with guard
@@ -36,6 +37,7 @@ Ubuntu 24.04.4 LTS Server deployment and management tool for Mac Pro 2013 (MacPr
 │   ├── detect.sh                    # detect_iso, detect_usb_devices, select_usb_device
 │   ├── disk.sh                      # analyze_disk_layout, shrink_apfs_if_needed, create_esp_partition
 │   ├── autoinstall.sh               # generate_autoinstall, generate_dualboot_storage
+│   ├── autoinstall-schema.json      # Subiquity YAML validation schema
 │   ├── bless.sh                     # verify_esp_contents, attempt_bless
 │   ├── deploy.sh                    # 7-phase checkpointed deployment with journal state
 │   └── revert.sh                    # revert_changes, handle_revert_flag, journal-aware rollback
@@ -54,7 +56,10 @@ Ubuntu 24.04.4 LTS Server deployment and management tool for Mac Pro 2013 (MacPr
 │   ├── test_rollback.sh            # lib/rollback.sh tests
 │   ├── test_verify.sh              # lib/verify.sh tests
 │   ├── test_dryrun.sh              # lib/dryrun.sh tests
-│   └── TESTING_PROMPT.md           # Comprehensive code review and testing protocol
+│   ├── TESTING_PROMPT.md           # Comprehensive code review and testing protocol
+│   └── vm/                          # VM test environment (uses --vm flag)
+│       ├── create-vm.sh             # VirtualBox VM creation
+│       └── test-vm.sh              # Run/monitor/SSH/stop
 ├── README.md                        # Documentation
 ├── How-to-Update.md                 # Kernel update safety guide (7 phases with rollback)
 ├── Post-Install.md                  # Post-install operations (erase macOS, system update)
@@ -63,12 +68,12 @@ Ubuntu 24.04.4 LTS Server deployment and management tool for Mac Pro 2013 (MacPr
 │   ├── package.json                 # Node.js package manifest
 │   ├── start.sh / stop.sh / reset.sh
 │   └── logs/
-├── vm-test/                         # VirtualBox test environment
+├── vm-test/                         # VirtualBox test environment (superseded by build-iso.sh --vm)
 │   ├── autoinstall-vm.yaml          # VM-specific autoinstall (Ethernet, non-fatal driver init)
-│   ├── build-iso-vm.sh              # VM ISO builder
-│   ├── create-vm.sh                 # VirtualBox VM creation
-│   └── test-vm.sh                   # Run/monitor/SSH/stop
+│   ├── build-iso-vm.sh              # VM ISO builder (use build-iso.sh --vm instead)
 └── prereqs/                         # Stock Ubuntu ISO (*.iso gitignored)
+
+# Runtime output: ~/.Ubuntu_Deployment/    # Generated files (ISO, autoinstall.yaml, deploy.conf)
 ```
 
 ## Build/Lint/Test Commands
@@ -117,12 +122,14 @@ cd macpro-monitor && ./start.sh    # Start (port 8080)
 
 ### VM Test
 ```bash
-cd vm-test && sudo ./build-iso-vm.sh && ./create-vm.sh && ./test-vm.sh
+cd tests/vm && sudo ./create-vm.sh && ./test-vm.sh
+# Or use build-iso.sh --vm:
+sudo ./build-iso.sh --vm
 ```
 
 ### Syntax check all shell scripts
 ```bash
-bash -n prepare-deployment.sh && bash -n lib/*.sh && bash -n build-iso.sh && bash -n vm-test/*.sh
+bash -n prepare-deployment.sh && bash -n lib/*.sh && bash -n build-iso.sh && bash -n tests/vm/*.sh
 ```
 
 ### Run unit tests
@@ -200,7 +207,7 @@ sudo ./prepare-deployment.sh --agent --build-iso --json
 sudo ./prepare-deployment.sh --agent --revert --json
 ```
 
-Flags: `--agent`, `--yes`, `--dry-run`, `--json`, `--method N`, `--storage N`, `--network N`, `--operation OP`, `--host HOST`, `--wifi-ssid`, `--wifi-password`, `--webhook-host`, `--webhook-port`, `--revert`, `--build-iso`
+Flags: `--agent`, `--yes`, `--dry-run`, `--json`, `--method N`, `--storage N`, `--network N`, `--operation OP`, `--host HOST`, `--wifi-ssid`, `--wifi-password`, `--webhook-host`, `--webhook-port`, `--revert`, `--build-iso`, `--username USER`, `--hostname HOST`, `--vm`
 
 Exit codes: 0=success, 1=general, 2=usage, 3=config, 4=check, 5=partial, 6=dependency, 7=network, 8=disk, 9=timeout, 10=auth, 11=dry-run-ok, 12=agent-param, 13=agent-denied
 
@@ -259,6 +266,12 @@ const PORT = parseInt(process.env.PORT || '8080', 10);
 const MAX_UPDATES = 200;
 ```
 
+### deploy.conf Parsing
+- `parse_conf()` uses `IFS='=' read -r key value` split (first `=` only) to preserve `$` in password hashes
+- No `xargs` — values are used directly as shell variables
+- `SSH_AUTHORIZED_KEYS` supports multi-line value via repeated `SSH_KEY=` entries
+- `SSH_KEYS_FILE=/path/to/file` loads keys from external file
+
 ## Error Handling
 
 | Language | Guidelines |
@@ -275,6 +288,44 @@ const MAX_UPDATES = 200;
 | JavaScript | `camelCase` | `camelCase()` | `PascalCase` | `UPPER_SNAKE` |
 
 **Files:** `snake_case.sh`, `snake_case.js`
+
+## deploy.conf Configuration
+
+Runtime configuration file (KEY=VALUE format, gitignored). Copy `deploy.conf.example` to `deploy.conf` and customize.
+
+### Config File Format
+```
+KEY=value                    # First = only (preserves $ in password hashes)
+SSH_KEY=ssh-rsa AAAA...      # One SSH_KEY per line for multiple keys
+SSH_KEYS_FILE=/path/to/file  # Load keys from external file
+```
+
+### Keys
+| Key | Description |
+|-----|-------------|
+| `USERNAME` | Ubuntu login username (default: ubuntu) |
+| `REALNAME` | Full name for user account |
+| `PASSWORD_HASH` | crypt(3) hash (e.g., `openssl passwd -6`) or plaintext |
+| `HOSTNAME` | Ubuntu system hostname |
+| `SSH_KEY` | SSH public key (repeat for multiple keys) |
+| `SSH_KEYS_FILE` | Path to file containing SSH public keys |
+| `ENCRYPTION` | Password encryption mode (see below) |
+| `OUTPUT_DIR` | Override runtime output directory (default: ~/.Ubuntu_Deployment/) |
+
+### Encryption Modes
+| Mode | Description |
+|------|-------------|
+| `plaintext` | Password stored as-is; file must be chmod 600 |
+| `aes256` | Password encrypted with `openssl aes-256-cbc -salt` |
+| `keychain` | Password retrieved from macOS Keychain via `security find-generic-password` |
+
+### First-Run Prompts
+If `deploy.conf` is missing or keys are empty, `prepare-deployment.sh` prompts for:
+- Username, real name, password (with encryption mode selection)
+- SSH public key or `SSH_KEYS_FILE` path
+- Hostname
+- WiFi credentials (if network=wifi)
+- Webhook URL (optional)
 
 ## DKMS Patch Architecture
 
@@ -323,6 +374,10 @@ Patches use `#if LINUX_VERSION_CODE >= KERNEL_VERSION(...)` guards and compile c
 - **169.254.x.x link-local addresses** — must be excluded from DHCP lease checks; `grep -q "inet 169\.254\."` guard on all IP validation
 - **Serial console output** — GRUB `console=ttyS0,115200` param enables serial output for headless debugging; VirtualBox UART1 maps to `/tmp/vmtest-serial.log`
 - **Blacklist loop redirect** — for-loop writing to blacklist file must use `>>` (append), not `>` (overwrite); `>` truncates on each iteration, only keeping the last driver entry
+
+## Runtime Output Directory
+
+All generated files (ISO, autoinstall.yaml, deploy.conf) go to `~/.Ubuntu_Deployment/` by default. Override via `OUTPUT_DIR` in `deploy.conf` or `--output-dir` CLI flag.
 
 ## Context Management Rules
 

@@ -6,7 +6,8 @@ set -u
 readonly SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 readonly PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 readonly LIB_DIR="${PROJECT_DIR}/lib"
-readonly ISO="${SCRIPT_DIR}/ubuntu-vmtest.iso"
+readonly OUTPUT_DIR="${OUTPUT_DIR:-$HOME/.Ubuntu_Deployment}"
+readonly ISO="${OUTPUT_DIR}/ubuntu-vmtest.iso"
 readonly VM_NAME="macpro-vmtest"
 readonly DISK_SIZE=25600
 

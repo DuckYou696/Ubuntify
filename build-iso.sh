@@ -3,20 +3,43 @@ set -e
 set -o pipefail
 set -u
 
+# Parse --vm flag before any other processing
+VM_MODE=0
+for arg in "$@"; do
+    case "$arg" in
+        --vm)
+            VM_MODE=1
+            ;;
+    esac
+done
+
 readonly SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 readonly LIB_DIR="${SCRIPT_DIR}/lib"
 readonly BASE_ISO="${SCRIPT_DIR}/prereqs/ubuntu-24.04.4-live-server-amd64.iso"
-readonly AUTOINSTALL="${SCRIPT_DIR}/autoinstall.yaml"
 readonly PKGS_DIR="${SCRIPT_DIR}/packages"
-readonly OUTPUT_ISO="${SCRIPT_DIR}/ubuntu-macpro.iso"
-readonly STAGING="/tmp/macpro-iso-staging"
+readonly OUTPUT_DIR="${OUTPUT_DIR:-$HOME/.Ubuntu_Deployment}"
+
+# VM-specific vs production defaults
+if [ "$VM_MODE" -eq 1 ]; then
+    readonly AUTOINSTALL="${SCRIPT_DIR}/vm-test/autoinstall-vm.yaml"
+    readonly OUTPUT_ISO="${OUTPUT_DIR}/ubuntu-vmtest.iso"
+    readonly STAGING="/tmp/vmtest-iso-staging"
+    readonly VM_PREFIX="[build-vm]"
+else
+    readonly AUTOINSTALL="${SCRIPT_DIR}/autoinstall.yaml"
+    readonly OUTPUT_ISO="${OUTPUT_DIR}/ubuntu-macpro.iso"
+    readonly STAGING="/tmp/macpro-iso-staging"
+    readonly VM_PREFIX="[build]"
+fi
 
 source "$LIB_DIR/colors.sh"
 
-log()   { echo -e "${GREEN}[build]${NC} $1"; }
+log()   { echo -e "${GREEN}${VM_PREFIX}${NC} $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; }
 die()   { error "$1"; exit 1; }
+
+source "${LIB_DIR}/dryrun.sh"
 
 cleanup() {
     local exit_code=$?
@@ -32,6 +55,11 @@ trap cleanup EXIT
 
 echo "========================================="
 echo " Mac Pro 2013 Ubuntu ISO Builder"
+if [ "$VM_MODE" -eq 1 ]; then
+    echo " VM Test Mode"
+else
+    echo " Production Mode"
+fi
 echo " Extract-and-repack approach"
 echo "========================================="
 echo ""
@@ -39,6 +67,7 @@ echo ""
 [ -f "$BASE_ISO" ] || die "Base ISO not found: $BASE_ISO"
 [ -f "$AUTOINSTALL" ] || die "autoinstall.yaml not found: $AUTOINSTALL"
 [ -d "$PKGS_DIR" ] || die "packages/ directory not found: $PKGS_DIR"
+mkdir -p "$OUTPUT_DIR"
 
 PKG_COUNT=$(ls "$PKGS_DIR"/*.deb 2>/dev/null | wc -l | tr -d ' ')
 log "Packages to include: $PKG_COUNT"
@@ -64,12 +93,15 @@ else
 fi
 echo ""
 log "[1/5] Cleaning and preparing staging area..."
-rm -rf "$STAGING" 2>/dev/null || sudo rm -rf "$STAGING"
+dry_run_exec "Removing staging directory $STAGING" \
+    rm -rf "$STAGING" 2>/dev/null || sudo rm -rf "$STAGING"
 mkdir -p "$STAGING/iso_root"
 
 log "[2/5] Extracting original ISO contents..."
-xorriso -osirrox on -indev "$BASE_ISO" -extract / "$STAGING/iso_root/"
-chmod -R u+w "$STAGING/iso_root"
+dry_run_exec "Extracting ISO contents from $BASE_ISO" \
+    xorriso -osirrox on -indev "$BASE_ISO" -extract / "$STAGING/iso_root/"
+dry_run_exec "Setting write permissions on extracted files" \
+    chmod -R u+w "$STAGING/iso_root"
 
 log "[3/5] Overlaying custom files..."
 
@@ -77,7 +109,11 @@ cp "$AUTOINSTALL" "$STAGING/iso_root/autoinstall.yaml"
 
 mkdir -p "$STAGING/iso_root/cidata"
 cp "$AUTOINSTALL" "$STAGING/iso_root/cidata/user-data"
-echo "instance-id: macpro-linux-i1" > "$STAGING/iso_root/cidata/meta-data"
+if [ "$VM_MODE" -eq 1 ]; then
+    echo "instance-id: vmtest-i1" > "$STAGING/iso_root/cidata/meta-data"
+else
+    echo "instance-id: macpro-linux-i1" > "$STAGING/iso_root/cidata/meta-data"
+fi
 touch "$STAGING/iso_root/cidata/vendor-data"
 
 mkdir -p "$STAGING/iso_root/macpro-pkgs"
@@ -87,7 +123,25 @@ mkdir -p "$STAGING/iso_root/macpro-pkgs/dkms-patches"
 cp "${PKGS_DIR}/dkms-patches/"*.patch "$STAGING/iso_root/macpro-pkgs/dkms-patches/" || die "Failed to copy DKMS patches"
 cp "${PKGS_DIR}/dkms-patches/series" "$STAGING/iso_root/macpro-pkgs/dkms-patches/" || die "Failed to copy DKMS series file"
 
-cat > "$STAGING/grub.cfg" << 'GRUBEOF'
+if [ "$VM_MODE" -eq 1 ]; then
+    cat > "$STAGING/grub.cfg" << 'GRUBEOF'
+set default=0
+set timeout=3
+
+menuentry "Ubuntu Server 24.04 VM Test Autoinstall" {
+    set gfxpayload=keep
+    linux /casper/vmlinuz autoinstall ds=nocloud nomodeset amdgpu.si.modeset=0 console=ttyS0,115200 ---
+    initrd /casper/initrd
+}
+
+menuentry "Ubuntu Server 24.04 (VM Manual Install)" {
+    set gfxpayload=keep
+    linux /casper/vmlinuz nomodeset amdgpu.si.modeset=0 console=ttyS0,115200 ---
+    initrd /casper/initrd
+}
+GRUBEOF
+else
+    cat > "$STAGING/grub.cfg" << 'GRUBEOF'
 set default=0
 set timeout=3
 
@@ -103,6 +157,7 @@ menuentry "Ubuntu Server 24.04 (Manual Install)" {
     initrd /casper/initrd
 }
 GRUBEOF
+fi
 
 cp "$STAGING/grub.cfg" "$STAGING/iso_root/EFI/boot/grub.cfg"
 cp "$STAGING/grub.cfg" "$STAGING/iso_root/boot/grub/grub.cfg"
@@ -124,11 +179,12 @@ echo "  ... (preserving original boot structure)"
 if echo "$BOOT_PARAMS" | grep -qE '[;&|`$(){}]'; then
     die "Suspicious characters in boot parameters — possible injection"
 fi
-eval "xorriso -as mkisofs \
-    $BOOT_PARAMS \
-    -V \"cidata\" \
-    -o \"${OUTPUT_ISO}\" \
-    \"${STAGING}/iso_root\""
+dry_run_exec "Building ISO image ${OUTPUT_ISO}" \
+    sh -c "eval \"xorriso -as mkisofs \
+        $BOOT_PARAMS \
+        -V 'cidata' \
+        -o '${OUTPUT_ISO}' \
+        '${STAGING}/iso_root'\""
 
 if [ ! -f "$OUTPUT_ISO" ]; then
     die "ISO creation failed — output file not found"
@@ -150,7 +206,8 @@ echo ""
 echo "Boot parameters in output ISO:"
 xorriso -indev "$OUTPUT_ISO" -report_el_torito plain 2>/dev/null | head -20 | sed 's/^/  /'
 
-rm -rf "$STAGING"
+dry_run_exec "Removing staging directory $STAGING" \
+    rm -rf "$STAGING"
 
 SIZE=$(du -h "$OUTPUT_ISO" | cut -f1)
 echo ""
@@ -166,5 +223,10 @@ echo "GRUB:     /EFI/boot/grub.cfg + /boot/grub/grub.cfg"
 echo "Volume:   cidata (NoCloud compliant)"
 echo ""
 echo "Boot methods:"
-echo "  USB:          Boot from USB, auto-entry selected after 3s"
-echo "  Deploy:       Use prepare-deployment.sh to deploy (ESP, USB, manual, or VM test)"
+if [ "$VM_MODE" -eq 1 ]; then
+    echo "  VirtualBox:   Create VM with EFI, boot ISO, auto-entry after 3s"
+    echo "  Serial:       Serial console enabled at 115200 baud"
+else
+    echo "  USB:          Boot from USB, auto-entry selected after 3s"
+    echo "  Deploy:       Use prepare-deployment.sh to deploy (ESP, USB, manual, or VM test)"
+fi

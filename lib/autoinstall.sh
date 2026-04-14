@@ -154,7 +154,7 @@ with open('$OUTPUT_PATH', 'w') as f:
     - |
       set -x
       LOG="/run/macpro.log"
-      WHURL="http://192.168.1.115:8080/webhook"
+      WHURL="__WHURL__"
       wh() { curl -s -X POST "\$WHURL" -H "Content-Type: application/json" -d "\$1" > /dev/null 2>&1 || true; }
       log() { echo "[early] \$1" >> "\$LOG"; }
 
@@ -197,9 +197,49 @@ with open('$OUTPUT_PATH', 'w') as f:
 
     log "Autoinstall configuration generated: $OUTPUT_PATH"
 
+    # Deploy.conf placeholders → autoinstall template
+    if [ -n "${USERNAME:-}" ]; then
+        sed -i "s#__USERNAME__#${USERNAME}#g" "$OUTPUT_PATH" 2>/dev/null || \
+            sed -i '' "s#__USERNAME__#${USERNAME}#g" "$OUTPUT_PATH"
+    fi
+    if [ -n "${REALNAME:-}" ]; then
+        sed -i "s#__REALNAME__#${REALNAME}#g" "$OUTPUT_PATH" 2>/dev/null || \
+            sed -i '' "s#__REALNAME__#${REALNAME}#g" "$OUTPUT_PATH"
+    fi
+    if [ -n "${PASSWORD_HASH:-}" ]; then
+        # $6$ hashes contain $ — must escape for sed
+        local escaped_hash
+        escaped_hash=$(printf '%s\n' "$PASSWORD_HASH" | sed 's/[&\\#]/\\&/g')
+        sed -i "s#__PASSWORD_HASH__#${escaped_hash}#g" "$OUTPUT_PATH" 2>/dev/null || \
+            sed -i '' "s#__PASSWORD_HASH__#${escaped_hash}#g" "$OUTPUT_PATH"
+    fi
+    if [ -n "${HOSTNAME:-}" ]; then
+        sed -i "s#__HOSTNAME__#${HOSTNAME}#g" "$OUTPUT_PATH" 2>/dev/null || \
+            sed -i '' "s#__HOSTNAME__#${HOSTNAME}#g" "$OUTPUT_PATH"
+    fi
+    if [ -n "${WHURL:-}" ]; then
+        local escaped_whurl
+        escaped_whurl=$(printf '%s\n' "$WHURL" | sed 's/[&\\#]/\\&/g')
+        sed -i "s#__WHURL__#${escaped_whurl}#g" "$OUTPUT_PATH" 2>/dev/null || \
+            sed -i '' "s#__WHURL__#${escaped_whurl}#g" "$OUTPUT_PATH"
+    fi
+    if [ -n "${SSH_KEYS:-}" ]; then
+        local yaml_keys=""
+        local bash_keys=""
+        while IFS= read -r key; do
+            [ -z "$key" ] && continue
+            yaml_keys="${yaml_keys}      - ${key}"$'\n'
+            bash_keys="${bash_keys} \"${key}\""
+        done <<< "$SSH_KEYS"
+        yaml_keys="${yaml_keys%$'\n'}"
+        local escaped_yaml
+        escaped_yaml=$(printf '%s\n' "$yaml_keys" | sed 's/[&\\\/]/\\&/g')
+        sed -i "s#__SSH_KEYS__#${escaped_yaml}#g" "$OUTPUT_PATH" 2>/dev/null || \
+            sed -i '' "s#__SSH_KEYS__#${escaped_yaml}#g" "$OUTPUT_PATH"
+        sed -i "s#__SSH_KEYS_LIST__#${bash_keys}#g" "$OUTPUT_PATH" 2>/dev/null || \
+            sed -i '' "s#__SSH_KEYS_LIST__#${bash_keys}#g" "$OUTPUT_PATH"
+    fi
     if [ -n "${WIFI_SSID:-}" ] && [ -n "${WIFI_PASSWORD:-}" ]; then
-        # Escape sed special characters (#, \, &) and use # as delimiter
-        # to handle SSIDs/passwords containing / or &
         local escaped_ssid escaped_password
         escaped_ssid=$(printf '%s\n' "$WIFI_SSID" | sed 's/[&\\#]/\\&/g')
         escaped_password=$(printf '%s\n' "$WIFI_PASSWORD" | sed 's/[&\\#]/\\&/g')

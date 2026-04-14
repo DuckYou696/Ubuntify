@@ -1,10 +1,56 @@
-# deploy.conf — WiFi and deployment configuration
-# Copy to deploy.conf and customize before running prepare-deployment.sh
+# deploy.conf — Deployment configuration
+# Copy to deploy.conf and customize, or run prepare-deployment.sh
+# to be prompted for values on first run.
+#
+# Security: This file contains sensitive credentials.
+# - Plaintext mode: chmod 600 deploy.conf
+# - AES-256-CBC mode: openssl enc -aes-256-cbc -pbkdf2 -salt -in deploy.conf -out deploy.conf.enc
+# - macOS Keychain mode: credentials stored via 'security' CLI
+#
+# All fields with __REPLACE__ must be customized before deployment.
 
-# WiFi credentials (used in autoinstall.yaml netplan generation)
-WIFI_SSID="ATTj6pXatS"
-WIFI_PASSWORD="j75b39=z?mpg"
+# ── Identity ──
+# Username for the installed Ubuntu system
+USERNAME="__REPLACE__"
+# Full name (GECOS field)
+REALNAME="__REPLACE__"
+# Password hash for the user account.
+# Generate with: openssl passwd -6 'yourpassword'
+# Or run prepare-deployment.sh to be prompted for a password.
+PASSWORD_HASH="__REPLACE__"
+# Hostname for the installed system (default: macpro-linux)
+HOSTNAME="macpro-linux"
 
-# Monitoring
-WEBHOOK_HOST="192.168.1.115"
+# ── SSH authorized keys ──
+# One key per line. Multiple SSH_KEY entries are accumulated.
+# Example:
+#   SSH_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@host"
+#   SSH_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... another@host"
+# Alternatively, point to an authorized_keys file:
+#   SSH_KEYS_FILE="$HOME/.ssh/authorized_keys"
+# If SSH_KEYS_FILE is set, keys from that file are included first,
+# followed by any SSH_KEY entries.
+SSH_KEY="__REPLACE__"
+SSH_KEYS_FILE=""
+
+# ── WiFi credentials ──
+# Used in autoinstall.yaml netplan generation
+WIFI_SSID="__REPLACE__"
+WIFI_PASSWORD="__REPLACE__"
+
+# ── Monitoring ──
+# Webhook endpoint for installation progress (macpro-monitor)
+WEBHOOK_HOST="192.168.1.X"
 WEBHOOK_PORT="8080"
+
+# ── Encryption ──
+# How to store deploy.conf credentials:
+#   plaintext  — chmod 600, no encryption (default, agent mode compatible)
+#   aes256     — encrypt with openssl aes-256-cbc -pbkdf2 (passphrase required each run)
+#   keychain   — macOS Keychain via 'security' CLI (macOS only, no passphrase needed)
+ENCRYPTION="plaintext"
+
+# ── Output directory ──
+# Where to store generated files (ISO, autoinstall.yaml, staging)
+# Default: ~/.Ubuntu_Deployment/
+OUTPUT_DIR=""

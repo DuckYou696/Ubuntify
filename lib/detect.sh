@@ -18,7 +18,7 @@ detect_iso() {
     local iso_path=""
 
     # Try to find ISO in common locations
-    for loc in "$SCRIPT_DIR"/ubuntu-macpro.iso "$SCRIPT_DIR"/prereqs/*.iso "$HOME"/*.iso; do
+    for loc in "${OUTPUT_DIR:-$HOME/.Ubuntu_Deployment}"/ubuntu-macpro.iso "$SCRIPT_DIR"/prereqs/*.iso "$HOME"/*.iso; do
         if [ -f "$loc" ]; then
             iso_path="$loc"
             break

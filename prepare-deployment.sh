@@ -51,27 +51,87 @@ if [ ! -f "$CONF_FILE" ]; then
     CONF_FILE="${SCRIPT_DIR}/deploy.conf.example"
 fi
 
+# Default values for config keys
+USERNAME=""
+REALNAME=""
+PASSWORD_HASH=""
+HOSTNAME="macpro-linux"
+SSH_KEYS=""
+SSH_KEYS_FILE=""
+ENCRYPTION="plaintext"
+OUTPUT_DIR="${HOME}/.Ubuntu_Deployment"
+WHURL=""
+
 parse_conf() {
     local conf="$1"
-    while IFS='=' read -r key value; do
-        [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
-        key=$(echo "$key" | xargs)
-        value=$(echo "$value" | xargs)
+    while IFS= read -r line; do
+        # Skip empty lines and comments
+        case "$line" in
+            ''|'#'*|[[:space:]]'#'*) continue ;;
+        esac
+        # Split on first = only (values may contain =)
+        local key="${line%%=*}"
+        local value="${line#*=}"
+        # Trim leading/trailing whitespace from key
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        # Skip empty keys
+        [ -z "$key" ] && continue
         case "$key" in
-            WIFI_SSID)     WIFI_SSID="$value" ;;
-            WIFI_PASSWORD) WIFI_PASSWORD="$value" ;;
-            WEBHOOK_HOST)  WEBHOOK_HOST="$value" ;;
-            WEBHOOK_PORT)  WEBHOOK_PORT="$value" ;;
-            *)             warn "Unknown config key: $key" ;;
+            # Identity
+            USERNAME)       USERNAME="$value" ;;
+            REALNAME)       REALNAME="$value" ;;
+            PASSWORD_HASH)  PASSWORD_HASH="$value" ;;
+            HOSTNAME)       HOSTNAME="$value" ;;
+            # SSH keys (accumulated, one per line)
+            SSH_KEY)        SSH_KEYS="${SSH_KEYS}${SSH_KEYS:+
+}$value" ;;
+            SSH_KEYS_FILE)  SSH_KEYS_FILE="$value" ;;
+            # WiFi (existing)
+            WIFI_SSID)      WIFI_SSID="$value" ;;
+            WIFI_PASSWORD)  WIFI_PASSWORD="$value" ;;
+            # Monitoring (existing)
+            WEBHOOK_HOST)   WEBHOOK_HOST="$value" ;;
+            WEBHOOK_PORT)   WEBHOOK_PORT="$value" ;;
+            # Encryption
+            ENCRYPTION)     ENCRYPTION="$value" ;;
+            # Output directory
+            OUTPUT_DIR)     OUTPUT_DIR="$value" ;;
+            *)              warn "Unknown config key: $key" ;;
         esac
     done < "$conf"
 }
 parse_conf "$CONF_FILE" || die "Failed to load $CONF_FILE"
 
+# Handle SSH_KEYS_FILE: read keys from file and prepend to SSH_KEYS
+if [ -n "$SSH_KEYS_FILE" ] && [ -f "$SSH_KEYS_FILE" ]; then
+    file_keys=""
+    while IFS= read -r key_line; do
+        case "$key_line" in
+            ssh-*|ecdsa-*|sk-*) file_keys="${file_keys}${file_keys:+
+}${key_line}" ;;
+        esac
+    done < "$SSH_KEYS_FILE"
+    SSH_KEYS="${file_keys}${SSH_KEYS:+
+${SSH_KEYS}}"
+fi
+
+# Compute derived values
+WHURL="http://${WEBHOOK_HOST}:${WEBHOOK_PORT}/webhook"
+
 export WIFI_SSID
 export WIFI_PASSWORD
 export WEBHOOK_HOST
 export WEBHOOK_PORT
+export WHURL
+export USERNAME
+export REALNAME
+export PASSWORD_HASH
+export HOSTNAME
+export SSH_KEYS
+export SSH_KEYS_FILE
+export ENCRYPTION
+export OUTPUT_DIR
 
 # Global state for cleanup (exported so lib modules can access)
 export INTERNAL_DISK=""
@@ -87,10 +147,179 @@ export DEPLOY_METHOD=""
 export STORAGE_LAYOUT=""
 export NETWORK_TYPE=""
 
+generate_password_hash() {
+    local password="$1"
+    openssl passwd -6 "$password" 2>/dev/null
+}
+
+prompt_config() {
+    local missing=0
+
+    if [ -z "$USERNAME" ]; then
+        if [ "$AGENT_MODE" -eq 1 ]; then
+            agent_error "USERNAME required in deploy.conf or --agent mode"
+            missing=1
+        else
+            USERNAME=$(tui_input "Username" "Enter username for the Ubuntu system:" "")
+            [ -z "$USERNAME" ] && { die "Username is required"; }
+        fi
+    fi
+    if [ -z "$REALNAME" ]; then
+        if [ "$AGENT_MODE" -eq 1 ]; then
+            REALNAME="$USERNAME"
+        else
+            REALNAME=$(tui_input "Full Name" "Enter full name (GECOS):" "$USERNAME")
+        fi
+    fi
+    if [ -z "$PASSWORD_HASH" ]; then
+        if [ "$AGENT_MODE" -eq 1 ]; then
+            agent_error "PASSWORD_HASH required in deploy.conf or --agent mode"
+            missing=1
+        else
+            local password password2
+            password=$(tui_password "Password" "Enter password for $USERNAME:")
+            password2=$(tui_password "Confirm Password" "Confirm password:")
+            if [ "$password" != "$password2" ]; then
+                die "Passwords do not match"
+            fi
+            PASSWORD_HASH=$(generate_password_hash "$password") || die "Failed to generate password hash"
+        fi
+    fi
+    if [ -z "$SSH_KEYS" ] && [ -z "$SSH_KEYS_FILE" ]; then
+        if [ "$AGENT_MODE" -eq 1 ]; then
+            agent_error "SSH_KEY or SSH_KEYS_FILE required in deploy.conf"
+            missing=1
+        else
+            local key
+            key=$(tui_input "SSH Public Key" "Enter SSH public key (or path to authorized_keys):" "")
+            if [ -f "$key" ]; then
+                SSH_KEYS_FILE="$key"
+            elif [ -n "$key" ]; then
+                SSH_KEYS="$key"
+            fi
+        fi
+    fi
+    if [ -z "$WIFI_SSID" ]; then
+        if [ "$AGENT_MODE" -eq 1 ]; then
+            agent_error "WIFI_SSID required in deploy.conf or --agent mode"
+            missing=1
+        else
+            WIFI_SSID=$(tui_input "WiFi SSID" "Enter WiFi network name:" "")
+        fi
+    fi
+    if [ -z "$WIFI_PASSWORD" ]; then
+        if [ "$AGENT_MODE" -eq 1 ]; then
+            agent_error "WIFI_PASSWORD required in deploy.conf or --agent mode"
+            missing=1
+        else
+            WIFI_PASSWORD=$(tui_password "WiFi Password" "Enter WiFi password:")
+        fi
+    fi
+    if [ -z "$WEBHOOK_HOST" ]; then
+        if [ "$AGENT_MODE" -eq 1 ]; then
+            WEBHOOK_HOST="localhost"
+        else
+            WEBHOOK_HOST=$(tui_input "Webhook Host" "Enter monitoring host IP (default: localhost):" "localhost")
+        fi
+    fi
+    if [ -z "$WEBHOOK_PORT" ]; then
+        WEBHOOK_PORT="${WEBHOOK_PORT:-8080}"
+    fi
+
+    if [ "$missing" -eq 1 ]; then
+        return 1
+    fi
+
+    WHURL="http://${WEBHOOK_HOST}:${WEBHOOK_PORT}/webhook"
+    export USERNAME REALNAME PASSWORD_HASH HOSTNAME SSH_KEYS SSH_KEYS_FILE
+    export WIFI_SSID WIFI_PASSWORD WEBHOOK_HOST WEBHOOK_PORT WHURL
+    return 0
+}
+
+save_config() {
+    local conf="${1:-$CONF_FILE}"
+    if [ "$AGENT_MODE" -eq 1 ]; then
+        agent_output "config" "deploy.conf path" "$conf"
+    fi
+    cat > "$conf" <<CONFEOF
+# deploy.conf — Generated by prepare-deployment.sh
+# Edit this file to customize future deployments
+USERNAME="$USERNAME"
+REALNAME="$REALNAME"
+HOSTNAME="$HOSTNAME"
+PASSWORD_HASH="$PASSWORD_HASH"
+CONFEOF
+    # Write SSH keys (one per line)
+    if [ -n "$SSH_KEYS" ]; then
+        while IFS= read -r key; do
+            [ -z "$key" ] && continue
+            echo "SSH_KEY=\"$key\"" >> "$conf"
+        done <<< "$SSH_KEYS"
+    fi
+    if [ -n "$SSH_KEYS_FILE" ]; then
+        echo "SSH_KEYS_FILE=\"$SSH_KEYS_FILE\"" >> "$conf"
+    fi
+    cat >> "$conf" <<CONFEOF
+WIFI_SSID="$WIFI_SSID"
+WIFI_PASSWORD="$WIFI_PASSWORD"
+WEBHOOK_HOST="$WEBHOOK_HOST"
+WEBHOOK_PORT="$WEBHOOK_PORT"
+ENCRYPTION="$ENCRYPTION"
+OUTPUT_DIR="$OUTPUT_DIR"
+CONFEOF
+    chmod 600 "$conf"
+}
+
+encrypt_config() {
+    local conf="${1:-$CONF_FILE}"
+    case "$ENCRYPTION" in
+        plaintext)
+            chmod 600 "$conf"
+            ;;
+        aes256)
+            local enc_file="${conf}.enc"
+            openssl enc -aes-256-cbc -pbkdf2 -salt -in "$conf" -out "$enc_file" || die "Failed to encrypt config"
+            rm -f "$conf"
+            chmod 600 "$enc_file"
+            log "Config encrypted to ${enc_file} (plaintext config removed)"
+            ;;
+        keychain)
+            if [ "$(uname)" != "Darwin" ]; then
+                die "Keychain encryption only available on macOS"
+            fi
+            security add-generic-password -a "macpro-deploy" -s "macpro-deploy-conf" -w "$(cat "$conf")" -U 2>/dev/null || \
+                die "Failed to store config in macOS Keychain"
+            chmod 600 "$conf"
+            log "Config stored in macOS Keychain"
+            ;;
+        *)
+            die "Unknown encryption mode: $ENCRYPTION (use: plaintext, aes256, keychain)"
+            ;;
+    esac
+}
+
+decrypt_config() {
+    local conf="${1:-$CONF_FILE}"
+    local enc_file="${conf}.enc"
+
+    if [ -f "$enc_file" ]; then
+        openssl enc -aes-256-cbc -pbkdf2 -d -in "$enc_file" -out "$conf" || die "Failed to decrypt config"
+        log "Config decrypted from ${enc_file}"
+    elif [ "$(uname)" = "Darwin" ]; then
+        local stored
+        stored=$(security find-generic-password -a "macpro-deploy" -s "macpro-deploy-conf" -w 2>/dev/null) || true
+        if [ -n "$stored" ]; then
+            echo "$stored" > "$conf"
+            chmod 600 "$conf"
+            log "Config restored from macOS Keychain"
+        fi
+    fi
+}
+
 show_help() {
     echo "Usage: sudo ./prepare-deployment.sh [OPTIONS]"
     echo ""
-    echo "Mac Pro 2013 Ubuntu Server Deployment Tool v0.2.10"
+    echo "Mac Pro 2013 Ubuntu Server Deployment Tool v0.2.13"
     echo ""
     echo "Options:"
     echo "  --dry-run             Show what would be done without making changes"
@@ -111,6 +340,9 @@ show_help() {
     echo "  --wifi-password PASS  Override WiFi password from deploy.conf"
     echo "  --webhook-host HOST   Override webhook host from deploy.conf"
     echo "  --webhook-port PORT   Override webhook port from deploy.conf"
+    echo "  --username USER       Override username from deploy.conf"
+    echo "  --hostname HOST       Override hostname from deploy.conf"
+    echo "  --vm                  Use VM test mode (autoinstall-vm.yaml)"
     echo ""
     echo "Modes:"
     echo "  Deploy   - Local operations: Build ISO, deploy to ESP/USB/VM, monitor"
@@ -156,6 +388,11 @@ while [ $# -gt 0 ]; do
         --webhook-host=*)    WEBHOOK_HOST="${1#*=}"; shift ;;
         --webhook-port)      WEBHOOK_PORT="$2"; shift 2 ;;
         --webhook-port=*)    WEBHOOK_PORT="${1#*=}"; shift ;;
+        --username)          USERNAME="$2"; shift 2 ;;
+        --username=*)        USERNAME="${1#*=}"; shift ;;
+        --hostname)          HOSTNAME="$2"; shift 2 ;;
+        --hostname=*)        HOSTNAME="${1#*=}"; shift ;;
+        --vm)                VM_MODE=1; shift ;;
         --revert)            handle_revert_flag "--revert"; exit $? ;;
         --help|-h)           show_help ;;
         *)                   echo "Unknown option: $1"; show_help ;;
@@ -211,7 +448,7 @@ menu_build_iso() {
     if [ "$build_rc" -ne 0 ]; then
         tui_msgbox "Build Failed" "ISO build failed (exit $build_rc).\n\nCheck log: $log_path"
     else
-        tui_msgbox "Build Complete" "ISO built successfully.\n\nOutput: $SCRIPT_DIR/ubuntu-macpro.iso"
+        tui_msgbox "Build Complete" "ISO built successfully.\n\nOutput: ${OUTPUT_DIR:-$HOME/.Ubuntu_Deployment}/ubuntu-macpro.iso"
     fi
 }
 
@@ -864,9 +1101,16 @@ main() {
     trap 'cleanup_on_error; exit 130' SIGINT
     trap 'cleanup_on_error; exit 143' SIGTERM
 
-    log_info "Mac Pro 2013 Ubuntu Deployment Tool v0.2.10 starting..."
+    log_info "Mac Pro 2013 Ubuntu Deployment Tool v0.2.13 starting..."
     log_info "Log file: $(log_get_file_path)"
     log_info "TUI backend: $TUI_BACKEND"
+
+    decrypt_config "$CONF_FILE"
+    mkdir -p "${OUTPUT_DIR:-$HOME/.Ubuntu_Deployment}"
+
+    if ! prompt_config; then
+        die "Missing required configuration — check deploy.conf or provide values via CLI flags"
+    fi
 
     if [ "${AGENT_MODE:-0}" -eq 1 ]; then
         run_agent_mode
