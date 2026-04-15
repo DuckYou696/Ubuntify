@@ -580,22 +580,8 @@ EOF
     tui_confirm "Confirm Configuration" "$summary"
 }
 
-# Escape backslashes and double quotes for KEY="value" config format
 _conf_escape() {
-    local result=""
-    local ch=""
-    local i=0
-    local len=${#1}
-    while [ "$i" -lt "$len" ]; do
-        ch="${1:$i:1}"
-        case "$ch" in
-            '\\') result="${result}\\" ;;
-            '"') result="${result}\"" ;;
-            *) result="${result}${ch}" ;;
-        esac
-        i=$((i + 1))
-    done
-    printf '%s' "$result"
+    printf '%s' "$1" | awk '{gsub(/\\/,"\\\\"); gsub(/"/,"\\\""); print}'
 }
 
 save_config() {
