@@ -553,23 +553,51 @@ tui_checklist() {
 
 ## ASCII Art TUI Functions (raw backend enhancements)
 
-tui_ascii_header() {
+tui_animated_intro() {
     local subtitle="${1:-Mac Pro Conversion and Management Tool}"
-    echo ""
-    if command -v figlet >/dev/null 2>&1; then
-        figlet -f slant "Ubuntify" 2>/dev/null | sed 's/^/    /'
+    if command -v durdraw >/dev/null 2>&1; then
+        durdraw -p "$HOME/.ubuntify/intro.dur" -x 1 -d 2 2>/dev/null || tui_cool_header "$subtitle"
     else
-        cat << 'EOF'
-    _   _ _                 _   _  __
-   | | | | |__  _   _ _ __ | |_(_)/ _|_   _
-   | |_| | '_ \| | | | '_ \| __| | |_| | | |
-   |  _  | |_) | |_| | | | | |_| |  _| |_| |
-   |_| |_|_.__/ \__,_|_| |_|\__|_|_|  \__, |
-                                      |___/
-EOF
+        tui_cool_header "$subtitle"
     fi
+}
+
+tui_cool_header() {
+    local subtitle="${1:-Mac Pro Conversion and Management Tool}"
+    if command -v figlet >/dev/null 2>&1; then
+        local art=$(figlet -f standard "Ubuntify" 2>/dev/null)
+    else
+        local art=" _   _ _                 _   _  __       
+| | | | |__  _   _ _ __ | |_(_)/ _|_   _ 
+| | | | '_ \| | | | '_ \| __| | |_| | | |
+|_| |_| |_) | |_| | | | | |_| |  _| |_| |
+ \___/|_.__/ \__,_|_| |_|\__|_|_|  \__, |
+                                   |___/ "
+    fi
+    local max_width=0
+    while IFS= read -r line; do
+        local len=${#line}
+        [ "$len" -gt "$max_width" ] && max_width=$len
+    done <<< "$art"
+    local subtitle_len=${#subtitle}
+    [ "$subtitle_len" -gt "$max_width" ] && max_width=$subtitle_len
+    max_width=$((max_width + 4))
+    local dashes=$(printf '%*s' $max_width '')
     echo ""
-    echo "    ${subtitle}"
+    echo "┌─${dashes// /─}─┐"
+    while IFS= read -r line; do
+        local len=${#line}
+        local padding=$((max_width - len))
+        echo "│ $(printf '%s%*s' "$line" $padding '') │"
+    done <<< "$art"
+    local padding=$((max_width - subtitle_len))
+    echo "│ $(printf '%s%*s' "$subtitle" $padding '') │"
+    echo "└─${dashes// /─}─┘"
+    echo ""
+}
+
+tui_ascii_header() {
+    tui_cool_header "$1"
 }
 
 tui_box() {
