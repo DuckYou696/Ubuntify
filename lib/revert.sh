@@ -152,6 +152,16 @@ cleanup_on_error() {
 
     # Trigger rollback for any error or signal exit (>=128 is signal-caused)
     if [ "$EXIT_CODE" -ne 0 ] || [ "$EXIT_CODE" -ge 128 ]; then
+        # Skip rollback for agent remote operations (sysinfo, kernel_status, etc.)
+        # These don't modify local disk state so there's nothing to roll back
+        if [ "${AGENT_MODE:-0}" -eq 1 ] && [ -n "${REMOTE_OPERATION:-}" ]; then
+            if [ "$EXIT_CODE" -ge 128 ]; then
+                local signal_num=$((EXIT_CODE - 128))
+                warn "Agent operation interrupted by signal $signal_num (exit code $EXIT_CODE)"
+            fi
+            return
+        fi
+
         log "Cleanup triggered (exit code $EXIT_CODE)"
 
         # Use rollback_from_journal if available (more comprehensive)

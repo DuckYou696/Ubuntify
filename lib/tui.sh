@@ -289,7 +289,11 @@ tui_input() {
         echo "=== $title ===" >&2
         printf '%s [%s]: ' "$label" "$default_value" >&2
         local result
-        IFS= read -r result < /dev/tty
+        if [ -t 0 ]; then
+            IFS= read -r result
+        else
+            IFS= read -r result < /dev/tty
+        fi
         [ -z "$result" ] && result="$default_value"
         echo "$result"
         return 0
@@ -345,13 +349,17 @@ tui_password() {
         fi
     else
         trap - ERR
-        echo ""
+        echo "" >&2
         echo "=== $title ===" >&2
         local tmpfile
         local pass
         tmpfile=$(_tui_mktemp)
-        printf '%s' "$label: " >&2
-        IFS= read -rs pass < /dev/tty
+        printf '%s: ' "$label" >&2
+        if [ -t 0 ]; then
+            IFS= read -rs pass
+        else
+            IFS= read -rs pass < /dev/tty
+        fi
         printf '\n' >&2
         echo "$pass" > "$tmpfile"
         local result

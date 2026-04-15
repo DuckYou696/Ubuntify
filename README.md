@@ -1030,8 +1030,14 @@ sudo ./prepare-deployment.sh --agent --yes --operation kernel_update
 # Security updates (non-kernel)
 sudo ./prepare-deployment.sh --agent --yes --operation security_update
 
+# Health check
+sudo ./prepare-deployment.sh --agent --operation health_check
+
 # Disk usage
 sudo ./prepare-deployment.sh --agent --operation disk_usage
+
+# Rollback status
+sudo ./prepare-deployment.sh --agent --operation rollback_status
 
 # Reboot
 sudo ./prepare-deployment.sh --agent --yes --operation reboot
@@ -1041,16 +1047,22 @@ sudo ./prepare-deployment.sh --agent --yes --operation boot_macos
 ```
 
 | Operation | Description | Destructive? |
-|-----------|-------------|-------------|
-| `sysinfo` | System information | No |
-| `kernel_status` | Kernel version, pin status | No |
-| `kernel_pin` | Pin current kernel, disable updates | Yes |
-| `kernel_unpin` | Unpin kernel, enable updates | Yes |
+|-----------|-------------|---------------|
+| `sysinfo` | System information (kernel, WiFi, disk, DKMS, uptime) | No |
+| `kernel_status` | Kernel version, pin status, held packages, apt preferences | No |
+| `kernel_pin` | Pin current kernel, disable apt sources, enable holds | Yes |
+| `kernel_unpin` | Unpin kernel, enable apt sources, remove holds | Yes |
 | `kernel_update` | Full kernel update process (7 phases with rollback) | Yes |
-| `security_update` | Non-kernel security updates | Yes |
+| `security_update` | Non-kernel security updates only | Yes |
+| `health_check` | Comprehensive health check (SSH, WiFi, disk, DKMS, kernel) | No |
 | `disk_usage` | Disk usage information | No |
+| `rollback_status` | Check for incomplete kernel update | No |
+| `driver_status` | WiFi/DKMS driver status check | No |
+| `driver_rebuild` | Rebuild DKMS WiFi driver module | Yes |
 | `reboot` | Reboot remote system | Yes |
 | `boot_macos` | Set next boot to macOS | Yes |
+| `erase_macos` | Delete macOS partitions, expand Ubuntu to full disk | Yes |
+| `apt_enable` / `apt_disable` | Enable/disable APT package sources | Yes |
 
 **Note**: macOS erasure is a manual process documented in the [Erasing macOS and Expanding to Full Disk](#erasing-macos-and-expanding-to-full-disk) section above. It is not available as an agent `--operation` flag.
 

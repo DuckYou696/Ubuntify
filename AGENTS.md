@@ -202,7 +202,7 @@ sudo ./prepare-deployment.sh --agent --operation kernel_status --host macpro-lin
 sudo ./prepare-deployment.sh --agent --revert --json
 ```
 
-Flags: `--agent`, `--yes`, `--dry-run`, `--json`, `--method N`, `--storage N`, `--network N`, `--operation OP`, `--host HOST`, `--wifi-ssid`, `--wifi-password`, `--webhook-host`, `--webhook-port`, `--revert`, `--username USER`, `--hostname HOST`, `--vm`
+Flags: `--agent`, `--yes`, `--verbose`, `--dry-run`, `--json`, `--method N`, `--storage N`, `--network N`, `--operation OP`, `--host HOST`, `--wifi-ssid`, `--wifi-password`, `--webhook-host`, `--webhook-port`, `--output-dir DIR`, `--revert`, `--username USER`, `--hostname HOST`, `--vm`
 
 Exit codes: 0=success, 1=general, 2=usage, 3=config, 4=check, 5=partial, 6=dependency, 7=network, 8=disk, 9=timeout, 10=auth, 11=dry-run-ok, 12=agent-param, 13=agent-denied
 
