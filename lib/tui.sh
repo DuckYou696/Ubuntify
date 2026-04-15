@@ -143,14 +143,42 @@ tui_menu() {
         echo "=== $title ===" >&2
         echo -e "$description" >&2
         echo "" >&2
+        local labels=""
+        local tags=""
+        local opt_num=1
+        while [ $# -ge 2 ]; do
+            local label="$1"
+            local tag="$2"
+            labels="${labels}|${opt_num}:${label}"
+            tags="${tags}|${tag}"
+            echo "  $opt_num) $label" >&2
+            opt_num=$((opt_num + 1))
+            shift 2
+        done
+        local max_opt=$((opt_num - 1))
+        echo "" >&2
         local response
         while true; do
-            read -rp "Proceed? (yes/no): " response < /dev/tty
+            read -rp "Enter choice [1-$max_opt]: " response < /dev/tty
             case "$response" in
-                yes|y|Y) return 0 ;;
-                no|n|N) return 1 ;;
+                ''|*[!0-9]*) ;;
+                *)
+                    if [ "$response" -ge 1 ] && [ "$response" -le "$max_opt" ]; then
+                        local IFS='|'
+                        set -- $tags
+                        local n=1
+                        shift
+                        for item in "$@"; do
+                            if [ "$n" -eq "$response" ]; then
+                                echo "$item"
+                                return 0
+                            fi
+                            n=$((n + 1))
+                        done
+                    fi
+                    ;;
             esac
-            echo "Please enter 'yes' or 'no'." >&2
+            echo "Please enter a number between 1 and $max_opt." >&2
         done
     fi
 }
