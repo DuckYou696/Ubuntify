@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ubuntify - Mockup C</title>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;500;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a2e;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Fira Code', monospace;
+        }
+        .container { text-align: center; }
+        .frame {
+            display: inline-block;
+            padding: 25px 35px;
+            border: 3px double #e94560;
+            position: relative;
+        }
+        .frame::before, .frame::after {
+            content: '';
+            position: absolute;
+            width: 20px;
+            height: 20px;
+        }
+        .frame::before {
+            top: -3px;
+            left: -3px;
+            border-top: 3px solid #e94560;
+            border-left: 3px solid #e94560;
+        }
+        .frame::after {
+            bottom: -3px;
+            right: -3px;
+            border-bottom: 3px solid #e94560;
+            border-right: 3px solid #e94560;
+        }
+        .ascii {
+            font-size: 13px;
+            line-height: 1.2;
+            white-space: pre;
+            color: #e94560;
+            text-shadow: 0 0 20px rgba(233,69,96,0.6);
+            animation: colorShift 5s ease-in-out infinite;
+        }
+        @keyframes colorShift {
+            0%, 100% { color: #e94560; text-shadow: 0 0 20px rgba(233,69,96,0.6); }
+            50% { color: #ff6b6b; text-shadow: 0 0 30px rgba(255,107,107,0.8); }
+        }
+        .subtitle {
+            margin-top: 25px;
+            font-size: 12px;
+            color: #533f5a;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            animation: subtitleShift 5s ease-in-out infinite;
+        }
+        @keyframes subtitleShift {
+            0%, 100% { color: #533f5a; letter-spacing: 4px; }
+            50% { color: #e94560; letter-spacing: 6px; }
+        }
+        .corner-label {
+            position: absolute;
+            top: -30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1a1a2e;
+            padding: 0 15px;
+            font-size: 10px;
+            color: #e94560;
+            letter-spacing: 2px;
+        }
+        .frame { position: relative; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="frame">
+            <span class="corner-label">Option C: Hot Pink / Art Deco</span>
+            <div class="ascii"> _   _ _                 _   _  __       
+| | | | |__  _   _ _ __ | |_(_)/ _|_   _ 
+| | | | '_ \| | | | '_ \| __| | |_| | | |
+|_| |_| |_) | |_| | | | | |_| |  _| |_| |
+ \___/|_.__/ \__,_|_| |_|\__|_|_|  \__, |
+                                   |___/ </div>
+            <div class="subtitle">Mac Pro Conversion and Management Tool</div>
+        </div>
+    </div>
+</body>
+</html>

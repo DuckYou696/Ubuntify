@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ubuntify - Mockup B</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0d1117;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .container {
+            position: relative;
+            padding: 40px;
+        }
+        .glow {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 400px;
+            height: 400px;
+            background: radial-gradient(circle, rgba(48,54,72,0.8) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .box {
+            position: relative;
+            border: 2px solid #30363d;
+            padding: 30px 40px;
+            background: #0d1117;
+            animation: borderGlow 4s ease-in-out infinite;
+        }
+        @keyframes borderGlow {
+            0%, 100% { border-color: #238636; box-shadow: 0 0 30px rgba(35,134,54,0.3); }
+            50% { border-color: #2ea043; box-shadow: 0 0 50px rgba(46,160,67,0.4); }
+        }
+        .ascii {
+            font-size: 13px;
+            line-height: 1.25;
+            white-space: pre;
+            color: #238636;
+            text-shadow: 0 0 8px rgba(35,134,54,0.8);
+            animation: textGlow 4s ease-in-out infinite;
+        }
+        @keyframes textGlow {
+            0%, 100% { color: #238636; text-shadow: 0 0 8px rgba(35,134,54,0.8); }
+            50% { color: #2ea043; text-shadow: 0 0 15px rgba(46,160,67,1); }
+        }
+        .subtitle {
+            margin-top: 20px;
+            font-size: 13px;
+            color: #484f58;
+            text-align: center;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            animation: subtitlePulse 4s ease-in-out infinite;
+        }
+        @keyframes subtitlePulse {
+            0%, 100% { color: #484f58; }
+            50% { color: #6e7681; }
+        }
+        .glow {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 400px;
+            height: 400px;
+            background: radial-gradient(circle, rgba(48,54,72,0.8) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .container {
+            position: relative;
+            padding: 40px;
+        }
+        .label {
+            position: absolute;
+            top: -12px;
+            left: 20px;
+            background: #0d1117;
+            padding: 0 10px;
+            font-size: 11px;
+            color: #484f58;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="glow"></div>
+        <div class="box">
+            <span class="label">Option B: Matrix Green</span>
+            <div class="ascii"> _   _ _                 _   _  __       
+| | | | |__  _   _ _ __ | |_(_)/ _|_   _ 
+| | | | '_ \| | | | '_ \| __| | |_| | | |
+|_| |_| |_) | |_| | | | | |_| |  _| |_| |
+ \___/|_.__/ \__,_|_| |_|\__|_|_|  \__, |
+                                   |___/ </div>
+            <div class="subtitle">Mac Pro Conversion and Management Tool</div>
+        </div>
+    </div>
+</body>
+</html>
