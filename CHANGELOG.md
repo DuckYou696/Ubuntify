@@ -4,6 +4,12 @@ All notable changes to the Mac Pro 2013 Ubuntu Autoinstall project are documente
 
 ## v0.2.x — TUI Architecture, Agent Mode, and Config System
 
+### v0.2.34 — Testing protocol cycle, version bump, agent sudo fix
+- fix: cleanup_on_error skips rollback for agent remote operations (sysinfo, kernel_status, health_check, etc. — no disk state modified, rollback irrelevant)
+- fix: update hardcoded version strings from v0.2.24 to v0.2.33 in prepare-deployment.sh
+- docs: add --verbose and --output-dir to AGENTS.md flags line, add missing manage operations to README.md
+- test: Phase 0-5 complete (80 unit tests pass, all scripts bash -n, YAML validates, autodocs consistent, agent operations match code)
+
 ### v0.2.32 — TUI stdin fixes, sudo enforcement, progress indicators
 - fix: tui.sh raw TUI branches read from /dev/tty (fixes heredoc stdin pollution), write prompts to stderr, interpret \n escapes. Restore accidentally-deleted tui_confirm function
 - fix: enforce sudo for TTY mode only; allow agent remote operations without sudo
