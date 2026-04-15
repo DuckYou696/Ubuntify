@@ -4,6 +4,15 @@ All notable changes to the Mac Pro 2013 Ubuntu Autoinstall project are documente
 
 ## v0.2.x — TUI Architecture, Agent Mode, and Config System
 
+### v0.2.32 — TUI stdin fixes, sudo enforcement, progress indicators
+- fix: tui.sh raw TUI branches read from /dev/tty (fixes heredoc stdin pollution), write prompts to stderr, interpret \n escapes. Restore accidentally-deleted tui_confirm function
+- fix: enforce sudo for TTY mode only; allow agent remote operations without sudo
+- fix: skip prompt_config for agent --operation (remote ops need no local config)
+- fix: strip __REPLACE__ placeholders from deploy.conf.example on first run (prevents misleading 'SSH keys already configured' message)
+- fix: disable macOS serial device detection in logging.sh (was blocking on /dev/ttys* open calls)
+- feat: add [....]/[ OK ]/[FAIL] progress messages to ISO extraction, package copy, and build phases for raw TUI visibility
+- test: 80 unit tests pass, all scripts pass bash -n, YAML validates, POSIX compliance verified
+
 ### v0.2.13 — Config system, template engine, and runtime output dir
 - feat: config file system with encryption (plaintext, aes256, keychain)
 - feat: template engine for deploy.conf generation with interactive prompts
