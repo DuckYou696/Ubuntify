@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ubuntify - Terminal Animation</title>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #050508;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Fira Code', monospace;
+            overflow: hidden;
+        }
+
+        /* CRT Screen Effect */
+        .crt {
+            position: relative;
+            background: #0a0a0f;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow:
+                0 0 100px rgba(0, 255, 255, 0.1),
+                inset 0 0 50px rgba(0, 0, 0, 0.5);
+        }
+
+        .crt::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.15),
+                rgba(0, 0, 0, 0.15) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+            border-radius: 20px;
+        }
+
+        /* Terminal Chrome */
+        .terminal-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #1a1a2e;
+        }
+
+        .terminal-btn {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .btn-close { background: #ff5f56; }
+        .btn-minimize { background: #ffbd2e; }
+        .btn-maximize { background: #27ca40; }
+
+        .terminal-title {
+            color: #666;
+            font-size: 12px;
+            margin-left: auto;
+        }
+
+        /* Animation Container */
+        .animation-container {
+            position: relative;
+            padding: 30px 40px;
+            min-width: 700px;
+        }
+
+        /* Box Drawing Border */
+        .border-box {
+            position: relative;
+            padding: 25px 30px;
+            border: 2px solid currentColor;
+            animation: borderPulse 3s ease-in-out infinite;
+        }
+
+        @keyframes borderPulse {
+            0%, 100% {
+                border-color: #00ffff;
+                box-shadow: 0 0 20px rgba(0, 255, 255, 0.3), inset 0 0 20px rgba(0, 255, 255, 0.05);
+            }
+            33% {
+                border-color: #00ff88;
+                box-shadow: 0 0 20px rgba(0, 255, 136, 0.3), inset 0 0 20px rgba(0, 255, 136, 0.05);
+            }
+            66% {
+                border-color: #ff00ff;
+                box-shadow: 0 0 20px rgba(255, 0, 255, 0.3), inset 0 0 20px rgba(255, 0, 255, 0.05);
+            }
+        }
+
+        /* ASCII Art */
+        .ascii-art {
+            font-size: 14px;
+            line-height: 1.2;
+            white-space: pre;
+            color: #00ffff;
+            text-shadow: 0 0 10px currentColor;
+            animation: colorCycle 3s ease-in-out infinite;
+        }
+
+        @keyframes colorCycle {
+            0%, 100% { color: #00ffff; text-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff; }
+            33% { color: #00ff88; text-shadow: 0 0 10px #00ff88, 0 0 20px #00ff88; }
+            66% { color: #ff00ff; text-shadow: 0 0 10px #ff00ff, 0 0 20px #ff00ff; }
+        }
+
+        /* Line Reveal Animation */
+        .ascii-art .line {
+            opacity: 0;
+            animation: lineReveal 0.5s ease-out forwards;
+        }
+
+        @keyframes lineReveal {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+                filter: blur(4px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+                filter: blur(0);
+            }
+        }
+
+        /* Subtitle */
+        .subtitle {
+            margin-top: 20px;
+            font-size: 16px;
+            color: #888;
+            text-align: center;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            animation: subtitleFade 2s ease-in-out infinite;
+        }
+
+        @keyframes subtitleFade {
+            0%, 100% { color: #666; }
+            50% { color: #00ffff; }
+        }
+
+        /* Glow Effects */
+        .glow-cyan { filter: drop-shadow(0 0 5px #00ffff); }
+        .glow-green { filter: drop-shadow(0 0 5px #00ff88); }
+        .glow-magenta { filter: drop-shadow(0 0 5px #ff00ff); }
+
+        /* Scan Line Overlay */
+        .scanlines {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.03),
+                rgba(0, 0, 0, 0.03) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+            z-index: 1000;
+        }
+
+        /* Ambient Animation */
+        .ambient-glow {
+            position: fixed;
+            width: 300px;
+            height: 300px;
+            border-radius: 50%;
+            filter: blur(100px);
+            opacity: 0.15;
+            animation: ambientMove 10s ease-in-out infinite;
+        }
+
+        .glow-1 {
+            top: 20%;
+            left: 20%;
+            background: #00ffff;
+        }
+
+        .glow-2 {
+            bottom: 20%;
+            right: 20%;
+            background: #ff00ff;
+            animation-delay: -5s;
+        }
+
+        @keyframes ambientMove {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            50% { transform: translate(50px, -30px) scale(1.2); }
+        }
+
+        /* Version Badge */
+        .version {
+            position: absolute;
+            bottom: -40px;
+            right: 0;
+            color: #333;
+            font-size: 11px;
+            letter-spacing: 1px;
+        }
+    </style>
+</head>
+<body>
+    <div class="scanlines"></div>
+    <div class="ambient-glow glow-1"></div>
+    <div class="ambient-glow glow-2"></div>
+
+    <div class="crt">
+        <div class="terminal-header">
+            <div class="terminal-btn btn-close"></div>
+            <div class="terminal-btn btn-minimize"></div>
+            <div class="terminal-btn btn-maximize"></div>
+            <span class="terminal-title">Terminal — 80×24</span>
+        </div>
+
+        <div class="animation-container">
+            <div class="border-box">
+                <div class="ascii-art">
+<div class="line" style="animation-delay: 0.1s"> _   _ _                 _   _  __       </div>
+<div class="line" style="animation-delay: 0.2s">| | | | |__  _   _ _ __ | |_(_)/ _|_   _ </div>
+<div class="line" style="animation-delay: 0.3s">| | | | '_ \| | | | '_ \| __| | |_| | | |</div>
+<div class="line" style="animation-delay: 0.4s">|_| |_| |_) | |_| | | | | |_| |  _| |_| |</div>
+<div class="line" style="animation-delay: 0.5s"> \___/|_.__/ \__,_|_| |_|\__|_|_|  \__, |</div>
+<div class="line" style="animation-delay: 0.6s">                                   |___/ </div>
+                </div>
+                <div class="subtitle">Mac Pro Conversion and Management Tool</div>
+            </div>
+            <div class="version">v0.2.45</div>
+        </div>
+    </div>
+</body>
+</html>
