@@ -764,9 +764,39 @@ fi
 # ── Mode Selection ──
 
 select_mode() {
-    local choice
-    choice=$(tui_menu "Mac Pro 2013 Ubuntu Deployment" "Select operation mode:" "Deploy" "deploy" "Manage" "manage" "Revert Failed Deploy" "revert" "Exit" "exit") || exit 0
-    echo "$choice"
+    tui_ascii_header "Ubuntu 24.04 LTS · Mac Pro 2013"
+
+    if [ "$TUI_BACKEND" = "raw" ]; then
+        local width=76
+        printf '    ╔%s╗\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+        printf '    ║  \033[1mSELECT OPERATION\033[0m%*s║\n' $((width - 20)) ''
+        printf '    ╠%s╣\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+        printf '    ║%*s║\n' $((width + 1)) ''
+        printf '    ║    [ ]  1. Deploy Ubuntu         Install Ubuntu on Mac Pro SSD        ║\n'
+        printf '    ║    [ ]  2. Manage System         Kernel · WiFi · Storage · Updates    ║\n'
+        printf '    ║    [ ]  3. Revert Failed Deploy  Rollback interrupted installation     ║\n'
+        printf '    ║    [ ]  4. Exit                  Quit                                  ║\n'
+        printf '    ║%*s║\n' $((width + 1)) ''
+        printf '    ╚%s╝\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+        printf '\n'
+        printf '    \033[2mKeys: SPACE Toggle  │  ENTER Execute\033[0m\n'
+        printf '\n'
+        printf '    > '
+
+        local choice_num
+        read -r choice_num
+        case "$choice_num" in
+            1) echo "deploy" ;;
+            2) echo "manage" ;;
+            3) echo "revert" ;;
+            4) echo "exit" ;;
+            *) echo "exit" ;;
+        esac
+    else
+        local choice
+        choice=$(tui_menu "Mac Pro 2013 Ubuntu Deployment" "Select operation mode:" "Deploy" "deploy" "Manage" "manage" "Revert Failed Deploy" "revert" "Exit" "exit") || exit 0
+        echo "$choice"
+    fi
 }
 
 # ── Deploy Mode Sub-menus ──
@@ -1037,16 +1067,52 @@ run_deploy_mode() {
 # ── Manage Mode Sub-menus ──
 
 manage_menu() {
-    local choice
-    choice=$(tui_menu "Manage Mode" "Select management operation:" \
-        "System Info" "sysinfo" \
-        "Kernel Management" "kernel" \
-        "WiFi/Driver" "wifi" \
-        "Storage" "storage" \
-        "APT Sources" "apt" \
-        "Reboot" "reboot" \
-        "Back to Main Menu" "back") || return 1
-    echo "$choice"
+    tui_ascii_header
+
+    if [ "$TUI_BACKEND" = "raw" ]; then
+        local width=76
+        printf '    ╔%s╗\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+        printf '    ║  \033[1mSYSTEM MANAGEMENT\033[0m%*s║\n' $((width - 22)) ''
+        printf '    ╠%s╣\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+        printf '    ║%*s║\n' $((width + 1)) ''
+        printf '    ║    [ ]  1. System Info         View kernel, WiFi, disk, DKMS status   ║\n'
+        printf '    ║    [ ]  2. Kernel Management    Status, Pin, Update, Security          ║\n'
+        printf '    ║    [ ]  3. WiFi / Driver        Status, Rebuild driver                ║\n'
+        printf '    ║    [ ]  4. Storage              Disk usage, Erase macOS                ║\n'
+        printf '    ║    [ ]  5. APT Sources          Enable, Disable updates                ║\n'
+        printf '    ║    [ ]  6. Reboot               Reboot, Boot to macOS                  ║\n'
+        printf '    ║    [ ]  7. Back to Main Menu                                     ║\n'
+        printf '    ║%*s║\n' $((width + 1)) ''
+        printf '    ╚%s╝\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+        printf '\n'
+        printf '    \033[2mKeys: SPACE Toggle  │  ENTER Execute\033[0m\n'
+        printf '\n'
+        printf '    > '
+
+        local choice_num
+        read -r choice_num
+        case "$choice_num" in
+            1) echo "sysinfo" ;;
+            2) echo "kernel" ;;
+            3) echo "wifi" ;;
+            4) echo "storage" ;;
+            5) echo "apt" ;;
+            6) echo "reboot" ;;
+            7|"") echo "back" ;;
+            *) echo "back" ;;
+        esac
+    else
+        local choice
+        choice=$(tui_menu "Manage Mode" "Select management operation:" \
+            "System Info" "sysinfo" \
+            "Kernel Management" "kernel" \
+            "WiFi/Driver" "wifi" \
+            "Storage" "storage" \
+            "APT Sources" "apt" \
+            "Reboot" "reboot" \
+            "Back to Main Menu" "back") || return 1
+        echo "$choice"
+    fi
 }
 
 menu_system_info() {
@@ -1064,65 +1130,156 @@ menu_system_info() {
 }
 
 menu_kernel() {
-    local choice
-    choice=$(tui_menu "Kernel Management" "Select kernel operation:" \
-        "Status" "status" \
-        "Pin kernel" "pin" \
-        "Unpin kernel" "unpin" \
-        "Update kernel" "update" \
-        "Security updates only" "security" \
-        "Back" "back") || return 1
+    if [ "$TUI_BACKEND" = "raw" ]; then
+        local width=76
+        printf '\n'
+        printf '    ╔%s╗\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+        printf '    ║  \033[1mKERNEL MANAGEMENT\033[0m%*s║\n' $((width - 21)) ''
+        printf '    ╠%s╣\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+        printf '    ║  \033[2mSelect multiple operations to execute:\033[0m%*s║\n' $((width - 48)) ''
+        printf '    ╟%s╢\n' "$(printf '─%.0s' $(seq 1 "$width"))"
+        printf '    ║  [ ]  Status             View current kernel and pin state          ║\n'
+        printf '    ║  [ ]  Pin Kernel         Lock to current kernel, block updates     ║\n'
+        printf '    ║  [ ]  Unpin Kernel      Allow kernel updates                      ║\n'
+        printf '    ║  [ ]  Update Kernel     Full 7-phase kernel update (⚠ risky)     ║\n'
+        printf '    ║  [ ]  Security Only     Non-kernel security patches only          ║\n'
+        printf '    ╟%s╢\n' "$(printf '─%.0s' $(seq 1 "$width"))"
+        printf '    ║  [ ]  Back              Return to management menu                 ║\n'
+        printf '    ╚%s╝\n' "$(printf '─%.0s' $(seq 1 "$width"))"
+        printf '\n'
+        printf '    \033[2mKeys: SPACE Toggle  │  ENTER Execute  │  Q Cancel\033[0m\n'
+        printf '\n'
+        printf '    > '
+
+        local choices
+        read -r choices
+        if [ -z "$choices" ]; then
+            return 1
+        fi
+
+        echo "$choices"
+    else
+        local choice
+        choice=$(tui_menu "Kernel Management" "Select kernel operation:" \
+            "Status" "status" \
+            "Pin kernel" "pin" \
+            "Unpin kernel" "unpin" \
+            "Update kernel" "update" \
+            "Security updates only" "security" \
+            "Back" "back") || return 1
+
+        echo "$choice"
+    fi
+}
+
+run_kernel_operations() {
+    local choices="$1"
+    local num
+    for num in $choices; do
+        case "$num" in
+            1)
+                if command -v remote_kernel_status >/dev/null 2>&1; then
+                    local status
+                    status=$(remote_kernel_status)
+                    tui_msgbox "Kernel Status" "$status"
+                fi
+                ;;
+            2)
+                if command -v remote_kernel_repin >/dev/null 2>&1; then
+                    if tui_confirm "Pin Kernel" "This will pin the current kernel.\n\nProceed?"; then
+                        remote_kernel_repin
+                        tui_msgbox "Kernel Pinned" "Kernel has been pinned."
+                    fi
+                fi
+                ;;
+            3)
+                if command -v remote_kernel_unpin >/dev/null 2>&1; then
+                    if tui_confirm "Unpin Kernel" "This will unpin the kernel.\n\nProceed?"; then
+                        remote_kernel_unpin
+                        tui_msgbox "Kernel Unpinned" "Kernel has been unpinned."
+                    fi
+                fi
+                ;;
+            4)
+                if tui_confirm "Update Kernel" "This will run the full kernel update process per AGENTS.md.\n\nThis is a complex operation with potential to brick the system if WiFi breaks.\n\nProceed?"; then
+                    if command -v remote_kernel_update >/dev/null 2>&1; then
+                        remote_kernel_update
+                    fi
+                fi
+                ;;
+            5)
+                if tui_confirm "Security Updates" "This will apply security updates excluding kernel packages.\n\nProceed?"; then
+                    if command -v remote_non_kernel_update >/dev/null 2>&1; then
+                        remote_non_kernel_update
+                    fi
+                fi
+                ;;
+        esac
+    done
+}
+
+kernel_handle_choice() {
+    local choice="$1"
 
     case "$choice" in
-        status)
-            if command -v remote_kernel_status >/dev/null 2>&1; then
-                local status
-                status=$(remote_kernel_status)
-                tui_msgbox "Kernel Status" "$status"
-            else
-                tui_msgbox "Not Implemented" "remote_kernel_status not available"
-            fi
-            ;;
-        pin)
-            if command -v remote_kernel_repin >/dev/null 2>&1; then
-                if tui_confirm "Pin Kernel" "This will pin the current kernel.\n\nProceed?"; then
-                    remote_kernel_repin
-                    tui_msgbox "Kernel Pinned" "Kernel has been pinned."
-                fi
-            else
-                tui_msgbox "Not Implemented" "remote_kernel_repin not available"
-            fi
-            ;;
-        unpin)
-            if command -v remote_kernel_unpin >/dev/null 2>&1; then
-                if tui_confirm "Unpin Kernel" "This will unpin the kernel.\n\nProceed?"; then
-                    remote_kernel_unpin
-                    tui_msgbox "Kernel Unpinned" "Kernel has been unpinned."
-                fi
-            else
-                tui_msgbox "Not Implemented" "remote_kernel_unpin not available"
-            fi
-            ;;
-        update)
-            if tui_confirm "Update Kernel" "This will run the full kernel update process per AGENTS.md.\n\nThis is a complex operation with potential to brick the system if WiFi breaks.\n\nProceed?"; then
-                if command -v remote_kernel_update >/dev/null 2>&1; then
-                    remote_kernel_update
-                else
-                    tui_msgbox "Not Implemented" "remote_kernel_update not available.\n\nSee AGENTS.md Kernel Update Process section for manual steps."
-                fi
-            fi
-            ;;
-        security)
-            if tui_confirm "Security Updates" "This will apply security updates excluding kernel packages.\n\nProceed?"; then
-                if command -v remote_non_kernel_update >/dev/null 2>&1; then
-                    remote_non_kernel_update
-                    tui_msgbox "Updates Complete" "Security updates have been applied."
-                else
-                    tui_msgbox "Not Implemented" "remote_non_kernel_update not available"
-                fi
-            fi
+        back|"") return 0 ;;
+        *[![:space:]]*)
+            for num in $choice; do
+                case "$num" in
+                    1) _kernel_status ;;
+                    2) _kernel_pin ;;
+                    3) _kernel_unpin ;;
+                    4) _kernel_update ;;
+                    5) _kernel_security ;;
+                esac
+            done
             ;;
     esac
+}
+
+_kernel_status() {
+    if command -v remote_kernel_status >/dev/null 2>&1; then
+        local status
+        status=$(remote_kernel_status)
+        tui_msgbox "Kernel Status" "$status"
+    fi
+}
+
+_kernel_pin() {
+    if command -v remote_kernel_repin >/dev/null 2>&1; then
+        if tui_confirm "Pin Kernel" "This will pin the current kernel.\n\nProceed?"; then
+            remote_kernel_repin
+            tui_msgbox "Kernel Pinned" "Kernel has been pinned."
+        fi
+    fi
+}
+
+_kernel_unpin() {
+    if command -v remote_kernel_unpin >/dev/null 2>&1; then
+        if tui_confirm "Unpin Kernel" "This will unpin the kernel.\n\nProceed?"; then
+            remote_kernel_unpin
+            tui_msgbox "Kernel Unpinned" "Kernel has been unpinned."
+        fi
+    fi
+}
+
+_kernel_update() {
+    if tui_confirm "Update Kernel" "This will run the full kernel update process.\n\nThis is risky - WiFi may break.\n\nProceed?"; then
+        if command -v remote_kernel_update >/dev/null 2>&1; then
+            remote_kernel_update
+        fi
+    fi
+}
+
+_kernel_security() {
+    if tui_confirm "Security Updates" "Apply security patches (non-kernel).\n\nProceed?"; then
+        if command -v remote_non_kernel_update >/dev/null 2>&1; then
+            remote_non_kernel_update
+            tui_msgbox "Updates Complete" "Security updates have been applied."
+        else
+            tui_msgbox "Not Implemented" "remote_non_kernel_update not available"
+        fi
+    fi
 }
 
 menu_wifi() {
@@ -1230,12 +1387,12 @@ run_manage_mode() {
 
         case "$choice" in
             sysinfo)   menu_system_info ;;
-            kernel)    menu_kernel ;;
+            kernel)    kernel_handle_choice "$(menu_kernel)" ;;
             wifi)      menu_wifi ;;
             storage)   menu_storage ;;
             apt)       menu_apt ;;
             reboot)    menu_reboot_remote ;;
-            back)      break ;;
+            back|"")   break ;;
         esac
     done
 }

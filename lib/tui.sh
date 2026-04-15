@@ -550,3 +550,234 @@ tui_checklist() {
         return 0
     fi
 }
+
+## ASCII Art TUI Functions (raw backend enhancements)
+
+tui_ascii_header() {
+    local subtitle="${1:-Ubuntu 24.04 LTS · Mac Pro 2013}"
+    cat << EOF
+
+    ┌─────────────────────────────────────────────────────────────────────────┐
+    │                                                                         │
+    │              ___  _     _        __        ___                         │
+    │             / __|| |_  (_)  ___\ \  / / (_)  __ _ _ __                │
+    │            | (__ |  _| | | / _\` \ \/ /  | | / _\` | '_ \               │
+    │             \___||_|   | || \__, |/\_\  | || \__,_| .__/               │
+    │                    |__/|___/|_|  |_|  |__/ |_|                          │
+    │                                                                         │
+    │                    ${subtitle}                    │
+    │                                                                         │
+    └─────────────────────────────────────────────────────────────────────────┘
+
+EOF
+}
+
+tui_box() {
+    local title="$1"
+    local content="$2"
+    local width="${3:-76}"
+    printf '\n'
+    printf '    ╔%s╗\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+    printf '    ║ %s%*s ║\n' "$title" $((width - ${#title} - 1)) ''
+    printf '    ╠%s╣\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+    printf '%s' "$content" | while IFS= read -r line; do
+        printf '    ║ %s%*s ║\n' "$line" $((width - ${#line} - 1)) ''
+    done
+    printf '    ╚%s╝\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+}
+
+tui_section() {
+    local title="$1"
+    local width="${2:-76}"
+    printf '\n'
+    printf '    ╔%s╗\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+    printf '    ║  %s %*s║\n' "$title" $((width - ${#title} - 3)) ''
+    printf '    ╚%s╝\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+}
+
+tui_checklist_box() {
+    local title="$1"
+    local description="$2"
+    shift 2
+    local size
+    size=$(_tui_get_size)
+    local width
+    width=$(echo "$size" | cut -d' ' -f2)
+
+    if [ "$TUI_BACKEND" = "dialog" ] || [ "$TUI_BACKEND" = "whiptail" ]; then
+        tui_checklist "$title" "$description" "$@"
+        return $?
+    fi
+
+    local idx=1
+    local tags=()
+    local states=()
+    local labels=()
+    printf '\n'
+    printf '    ╔%s╗\n' "$(printf '═%.0s' $(seq 1 $((width - 4))))"
+    printf '    ║  \033[1m%s\033[0m%*s║\n' "$title" $((width - ${#title} - 5)) ''
+    printf '    ╠%s╣\n' "$(printf '═%.0s' $(seq 1 $((width - 4))))"
+    [ -n "$description" ] && printf '    ║  \033[2m%s\033[0m%*s║\n' "$description" $((width - ${#description} - 5)) ''
+    [ -n "$description" ] && printf '    ╟%s╢\n' "$(printf '─%.0s' $(seq 1 $((width - 4))))"
+    while [ $# -ge 2 ]; do
+        local label="$1"
+        local tag="$2"
+        labels+=("$label")
+        tags+=("$tag")
+        local state="[ ]"
+        printf '    ║    %s  %d. %s%*s║\n' "$state" "$idx" "$label" $((width - ${#label} - 13)) ''
+        shift 2
+        idx=$((idx + 1))
+    done
+    printf '    ╚%s╝\n' "$(printf '─%.0s' $(seq 1 $((width - 4))))"
+    printf '\n'
+    printf '    \033[2mKeys: ↑↓ Navigate  │  SPACE Toggle  │  ENTER Confirm  │  Q Quit\033[0m\n'
+    printf '\n'
+    printf '    > '
+    return 0
+}
+
+tui_checkbox() {
+    local title="$1"
+    local description="${2:-}"
+    shift 2
+    local options=()
+    local tags=()
+    local width=70
+
+    while [ $# -ge 2 ]; do
+        options+=("$1")
+        tags+=("$2")
+        shift 2
+    done
+    local count=${#options[@]}
+    local selected=0
+    local choices=()
+    local i
+    for i in $(seq 0 $((count - 1))); do
+        choices+=(0)
+    done
+
+    while true; do
+        clear 2>/dev/null || printf '\033[2J\033[H'
+        printf '\n'
+        printf '    ╔%s╗\n' "$(printf '═%.0s' $(seq 1 $((width))))"
+        printf '    ║  \033[1m%s\033[0m%*s║\n' "$title" $((width - ${#title} - 4)) ''
+        printf '    ╠%s╣\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+        [ -n "$description" ] && printf '    ║  \033[2m%s\033[0m\n' "$description"
+        [ -n "$description" ] && printf '    ╟%s╢\n' "$(printf '─%.0s' $(seq 1 "$width"))"
+        local i=0
+        for option in "${options[@]}"; do
+            local marker="  "
+            local checkbox="[ ]"
+            if [ $i -eq $selected ]; then
+                marker=" \033[36m▸\033[0m"
+            fi
+            if [ "${choices[$i]}" -eq 1 ]; then
+                checkbox="[\033[32m█\033[0m]"
+            fi
+            if [ $i -eq $selected ]; then
+                printf '    ║%s \033[1m%s\033[0m %s %s%*s║\n' "$marker" "$checkbox" "$((i + 1))." "$option" $((width - ${#option} - ${#checkbox} - ${#i} - 8)) ''
+            else
+                printf '    ║%s %s %s %s%*s║\n' "$marker" "$checkbox" "$((i + 1))." "$option" $((width - ${#option} - ${#checkbox} - ${#i} - 8)) ''
+            fi
+            i=$((i + 1))
+        done
+        printf '    ╚%s╝\n' "$(printf '─%.0s' $(seq 1 "$width"))"
+        printf '\n'
+        local selected_tags=""
+        local sel_count=0
+        i=0
+        for tag in "${tags[@]}"; do
+            if [ "${choices[$i]}" -eq 1 ]; then
+                [ -n "$selected_tags" ] && selected_tags="$selected_tags, "
+                selected_tags="$selected_tags$tag"
+                sel_count=$((sel_count + 1))
+            fi
+            i=$((i + 1))
+        done
+        if [ $sel_count -gt 0 ]; then
+            printf '    \033[32m▸ Selected: %d item(s)\033[0m\n' "$sel_count"
+        else
+            printf '    \033[2m▸ No items selected\033[0m\n'
+        fi
+        printf '\n'
+        printf '    \033[2m↑↓ Navigate  │  SPACE Toggle  │  ENTER Done  │  Q Cancel\033[0m\n'
+
+        local key
+        IFS= read -rsn1 key < /dev/tty
+        case "$key" in
+            $'\e')
+                IFS= read -rsn1 -t 0.1 key
+                [ -n "$key" ] && IFS= read -rsn1 -t 0.1 key
+                case "$key" in
+                    A) selected=$((selected > 0 ? selected - 1 : count - 1)) ;;
+                    B) selected=$((selected < count - 1 ? selected + 1 : 0)) ;;
+                esac
+                ;;
+            ' ')
+                choices[$selected]=$((1 - ${choices[$selected]}))
+                ;;
+            '')
+                echo "$selected_tags"
+                return 0
+                ;;
+            q|Q)
+                return 1
+                ;;
+            [1-9])
+                local num=$((10#$key - 1))
+                if [ $num -lt $count ]; then
+                    selected=$num
+                fi
+                ;;
+        esac
+    done
+}
+
+tui_grid_checklist() {
+    local title="$1"
+    shift
+    local col1_width=30
+    local col2_width=30
+    local total_width=$((col1_width + col2_width + 20))
+
+    if [ "$TUI_BACKEND" = "dialog" ] || [ "$TUI_BACKEND" = "whiptail" ]; then
+        return 0
+    fi
+
+    printf '\n'
+    printf '    ╔%s╗\n' "$(printf '═%.0s' $(seq 1 $((total_width - 4))))"
+    printf '    ║  \033[1m%s\033[0m%*s║\n' "$title" $((total_width - ${#title} - 5)) ''
+    printf '    ╟%s╢\n' "$(printf '─%.0s' $(seq 1 $((total_width - 4))))"
+
+    local idx=1
+    while [ $# -ge 2 ]; do
+        local left_label="$1"
+        local left_tag="$2"
+        shift 2
+        local right_label=""
+        local right_tag=""
+        if [ $# -ge 2 ]; then
+            right_label="$1"
+            right_tag="$2"
+            shift 2
+        fi
+
+        printf '    ║  [%s] %d. %s' ' ' "$idx" "$left_label"
+        local pad=$((col1_width - ${#left_label} - ${#idx}))
+        [ $pad -gt 0 ] && printf '%*s' "$pad" ''
+        printf '      '
+        if [ -n "$right_label" ]; then
+            idx=$((idx + 1))
+            printf '[%s] %d. %s' ' ' "$idx" "$right_label"
+            pad=$((col2_width - ${#right_label} - ${#idx}))
+            [ $pad -gt 0 ] && printf '%*s' "$pad" ''
+        fi
+        printf '  ║\n'
+    done
+
+    printf '    ╚%s╝\n' "$(printf '─%.0s' $(seq 1 $((total_width - 4))))"
+    printf '\n'
+    printf '    \033[2mKeys: SPACE Toggle  │  ENTER Execute\033[0m\n'
+}
