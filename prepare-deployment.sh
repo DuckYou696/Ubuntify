@@ -1597,9 +1597,13 @@ main() {
     trap 'cleanup_on_error; exit 130' SIGINT
     trap 'cleanup_on_error; exit 143' SIGTERM
 
-    log_info "Ubuntify v0.2.43 starting..."
+    log_info "Ubuntify v0.2.44 starting..."
     log_info "Log file: $(log_get_file_path)"
     log_info "TUI backend: $TUI_BACKEND"
+
+    if [ "$TUI_BACKEND" = "raw" ]; then
+        tui_ascii_header "Mac Pro Conversion and Management Tool"
+    fi
 
     mkdir -p "${OUTPUT_DIR:-$HOME/.Ubuntu_Deployment}"
     decrypt_config "$CONF_FILE"
