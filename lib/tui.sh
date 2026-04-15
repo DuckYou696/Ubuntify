@@ -223,7 +223,12 @@ tui_confirm() {
         echo "" >&2
         local response
         while true; do
-            read -rp "Proceed? (yes/no): " response < /dev/tty
+            printf 'Proceed? (yes/no): ' >&2
+            if ! IFS= read -r response < /dev/tty; then
+                printf '\n' >&2
+                return 1
+            fi
+            printf '\n' >&2
             case "$response" in
                 yes|y|Y) return 0 ;;
                 no|n|N) return 1 ;;
@@ -565,26 +570,30 @@ tui_animated_intro() {
 
 tui_cool_header() {
     local subtitle="${1:-Mac Pro Conversion and Management Tool}"
-    local art=" _   _ _                 _   _  __       
-| | | | |__  _   _ _ __ | |_(_)/ _|_   _ 
-| | | | '_ \| | | | '_ \| __| | |_| | | |
-| _  | |_) | |_| | | | | |_| |  _| |_| |
-|_| |_|_.__/ \__,_|_| |_|\__|_|_|  \__, |
-                                   |___/ "
-    [ -z "$art" ] && command -v figlet >/dev/null 2>&1 && art=$(figlet -f standard "Ubuntify" 2>/dev/null)
+    local art=" /\$\$   /\$\$ /\$\$                             /\$\$     /\$\$  /\$\$\$\$\$\$          |
+| \$\$  | \$\$| \$\$                            | \$\$    |__/ /\$\$__  \$\$         |
+| \$\$  | \$\$| \$\$\$\$\$\$\$  /\$\$   /\$\$ /\$\$\$\$\$\$\$  /\$\$\$\$\$\$\$   /\$\$| \$\$  \\\\__//\$\$   /\$\$|
+| \$\$  | \$\$| \$\$__  \$\$| \$\$  | \$\$| \$\$__  \$\$|_  \$\$_/  | \$\$| \$\$\$\$   | \$\$  | \$\$|
+| \$\$  | \$\$| \$\$  \\ \$\$| \$\$  | \$\$| \$\$  \\ \$\$  | \$\$    | \$\$| \$\$_/   | \$\$  | \$\$|
+| \$\$  | \$\$| \$\$  | \$\$| \$\$  | \$\$| \$\$  | \$\$  | \$\$ /\$\$| \$\$| \$\$     | \$\$  | \$\$|
+|  \$\$\$\$\$\$/| \$\$\$\$\$\$\$/|  \$\$\$\$\$\$/| \$\$  | \$\$  |  \$\$\$\$/| \$\$| \$\$     |  \$\$\$\$\$\$\$|
+ \\______/ |_______/  \\______/ |__/  |__/   \\___/  |__/|__/      \\____  \$\$|
+                                                                /\$\$  | \$\$|
+                                                               |  \$\$\$\$\$\$/|
+                                                                \\______/ |"
     local max_width=0 line
     while IFS= read -r line; do
         [ "${#line}" -gt "$max_width" ] && max_width=${#line}
     done <<< "$art"
-    [ "${#subtitle}" -gt "$max_width" ] && max_width=${#subtitle}
-    max_width=$((max_width + 4))
+    local sub_len=${#subtitle}
+    [ "$sub_len" -gt "$max_width" ] && max_width=$sub_len
     local bar=$(printf '%*s' $max_width '' | tr ' ' '─')
     echo ""
     echo -e "  \033[0;32m┌─${bar}─┐\033[0m"
     while IFS= read -r line; do
         printf "  \033[0;32m│\033[0m \033[1;32m%s\033[0m\033[0;32m%*s│\033[0m\n" "$line" $((max_width - ${#line})) ''
     done <<< "$art"
-    printf "  \033[0;32m│\033[0m \033[1;32m%s\033[0m\033[0;32m%*s│\033[0m\n" "$subtitle" $((max_width - ${#subtitle} - 1)) ''
+    printf "  \033[0;32m│\033[0m \033[1;32m%s\033[0m\033[0;32m%*s│\033[0m\n" "$subtitle" $((max_width - sub_len)) ''
     echo -e "  \033[0;32m└─${bar}─┘\033[0m"
     echo ""
 }
