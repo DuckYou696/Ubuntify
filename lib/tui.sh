@@ -12,7 +12,7 @@ _TUI_SH_SOURCED=1
 source "${LIB_DIR:-./lib}/colors.sh"
 source "${LIB_DIR:-./lib}/dryrun.sh"
 
-readonly TUI_BACKTITLE="Mac Pro 2013 Ubuntu Server"
+readonly TUI_BACKTITLE="Ubuntify - Mac Pro Conversion Tool"
 
 ## Backend Detection
 

@@ -669,7 +669,7 @@ decrypt_config() {
 show_help() {
     echo "Usage: sudo ./prepare-deployment.sh [OPTIONS]"
     echo ""
-    echo "Mac Pro 2013 Ubuntu Server Deployment Tool v0.2.35"
+    echo "Ubuntify - Mac Pro Conversion Tool v0.2.43"
     echo ""
     echo "Options:"
     echo "  --dry-run             Show what would be done without making changes"
@@ -794,7 +794,7 @@ select_mode() {
         esac
     else
         local choice
-        choice=$(tui_menu "Mac Pro 2013 Ubuntu Deployment" "Select operation mode:" "Deploy" "deploy" "Manage" "manage" "Revert Failed Deploy" "revert" "Exit" "exit") || exit 0
+        choice=$(tui_menu "Ubuntify" "Select operation mode:" "Deploy" "deploy" "Manage" "manage" "Revert Failed Deploy" "revert" "Exit" "exit") || exit 0
         echo "$choice"
     fi
 }
@@ -1597,7 +1597,7 @@ main() {
     trap 'cleanup_on_error; exit 130' SIGINT
     trap 'cleanup_on_error; exit 143' SIGTERM
 
-    log_info "Mac Pro 2013 Ubuntu Deployment Tool v0.2.35 starting..."
+    log_info "Ubuntify v0.2.43 starting..."
     log_info "Log file: $(log_get_file_path)"
     log_info "TUI backend: $TUI_BACKEND"
 
